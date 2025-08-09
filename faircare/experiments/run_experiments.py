@@ -1,85 +1,155 @@
 # faircare/experiments/run_experiments.py
-import os, argparse, numpy as np, torch
-from ..config import Defaults
-from ..core.utils import set_seed, ensure_dir, save_json
-from ..data import load_heart, load_adult, make_synth, dirichlet_partition, load_mimic_demo, load_eicu_subset
-from ..models.classifier import MLPClassifier
-from ..core.server import Server
-from ..core.client import Client
-from ..core.trainer import Trainer
-from ..algos import FedAvg, FedProx, QFFL, AFL, FairFed, FedGFT, FairFATE, FairCareFL
+import os, json, argparse, random
+import numpy as np
+import torch
+from faircare.data.heart import load_heart
+from faircare.data.adult import load_adult
+from faircare.data.partition import dirichlet_partition
+from faircare.models.classifier import MLPClassifier
+from faircare.models.adversary import LogitAdversary
+from faircare.core.client import local_train
+from faircare.core.evaluation import evaluate_union, evaluate_with_sweep
+from faircare.algos.faircare_fl import FairCareFL
+from faircare.algos.fedavg import FedAvg
+from faircare.algos.fedprox import FedProx
+from faircare.algos.qffl import QFFL
+from faircare.algos.afl import AFL
+from faircare.algos.fairfed import FairFed
+from faircare.algos.fedgft import FedGFT
+from faircare.algos.fairfate import FairFATE
 
-def make_clients(X, y, s, num_clients, alpha, seed, input_dim):
-    parts = dirichlet_partition(len(y), num_clients, alpha=alpha, seed=seed)
-    clients = []
-    for cid, idx in enumerate(parts):
-        if len(idx) < 10:
-            continue
-        n = len(idx); ntr = int(0.8*n)
-        idx_tr, idx_va = idx[:ntr], idx[ntr:]
-        clients.append(Client(cid, X[idx_tr], y[idx_tr], s[idx_tr],
-                                   X[idx_va], y[idx_va], s[idx_va],
-                                   input_dim=input_dim))
-    return clients
+def get_data(name: str, sensitive: str):
+    name = name.lower()
+    if name == "heart":
+        return load_heart()
+    elif name == "adult":
+        return load_adult()
+    else:
+        raise ValueError(f"Unknown dataset {name}")
 
-def get_data(name, sensitive):
-    if name=="heart":  return load_heart()
-    if name=="adult":  return load_adult(sensitive=sensitive)
-    if name=="synth":  return make_synth()
-    if name=="mimic":  return load_mimic_demo()
-    if name=="eicu":   return load_eicu_subset()
-    raise ValueError(f"Unknown dataset {name}")
-
-def build_algo(args):
-    if args.algo=="fedavg":   return FedAvg(args.local_epochs, args.batch_size, args.lr)
-    if args.algo=="fedprox":  return FedProx(args.local_epochs, args.batch_size, args.lr, 0.01)
-    if args.algo=="qffl":     return QFFL(args.local_epochs, args.batch_size, args.lr, args.q)
-    if args.algo=="afl":      return AFL(args.local_epochs, args.batch_size, args.lr)
-    if args.algo=="fairfed":  return FairFed(args.local_epochs, args.batch_size, args.lr)
-    if args.algo=="fedgft":   return FedGFT(args.local_epochs, args.batch_size, args.lr, args.lambdaG)
-    if args.algo=="fairfate": return FairFATE(args.local_epochs, args.batch_size, args.lr)
-    if args.algo=="faircare": return FairCareFL(args.local_epochs, args.batch_size, args.lr, args.lambdaG, args.lambdaC, args.lambdaA, args.q, args.beta, use_adv=not args.no_adv)
-    raise ValueError("Unknown algo")
+def set_seed(seed: int):
+    random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
+    torch.use_deterministic_algorithms(False)
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--dataset", type=str, default="heart", choices=["heart","adult","synth","mimic","eicu"])
-    p.add_argument("--algo", type=str, default="faircare")
-    p.add_argument("--num_clients", type=int, default=Defaults.num_clients)
-    p.add_argument("--rounds", type=int, default=Defaults.rounds)
-    p.add_argument("--local_epochs", type=int, default=Defaults.local_epochs)
-    p.add_argument("--batch_size", type=int, default=Defaults.batch_size)
-    p.add_argument("--lr", type=float, default=Defaults.lr)
-    p.add_argument("--beta", type=float, default=Defaults.beta_momentum)
-    p.add_argument("--lambdaG", type=float, default=Defaults.lambdaG)
-    p.add_argument("--lambdaC", type=float, default=Defaults.lambdaC)
-    p.add_argument("--lambdaA", type=float, default=Defaults.lambdaA)
-    p.add_argument("--q", type=float, default=Defaults.q)
-    p.add_argument("--dirichlet_alpha", type=float, default=Defaults.dirichlet_alpha)
-    p.add_argument("--sensitive_attr", type=str, default=Defaults.sensitive_attr)
-    p.add_argument("--seed", type=int, default=Defaults.seed)
-    p.add_argument("--outdir", type=str, required=True)
-    p.add_argument("--no-adv", action="store_true")
-    args = p.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dataset", type=str, default="heart")
+    ap.add_argument("--sensitive_attr", type=str, default="sex")
+    ap.add_argument("--algo", type=str, default="faircare",
+                    choices=["faircare","fedavg","fedprox","qffl","afl","fairfed","fedgft","fairfate"])
+    ap.add_argument("--num_clients", type=int, default=5)
+    ap.add_argument("--rounds", type=int, default=50)
+    ap.add_argument("--local_epochs", type=int, default=1)
+    ap.add_argument("--batch_size", type=int, default=64)
+    ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--lambdaG", type=float, default=2.0)
+    ap.add_argument("--lambdaC", type=float, default=0.5)
+    ap.add_argument("--lambdaA", type=float, default=0.5)
+    ap.add_argument("--q", type=float, default=0.5)
+    ap.add_argument("--beta", type=float, default=0.9)
+    ap.add_argument("--dirichlet_alpha", type=float, default=0.5)
+    ap.add_argument("--server_lr", type=float, default=0.5)
+    ap.add_argument("--temperature", type=float, default=1.0)
+    ap.add_argument("--pcgrad", action="store_true", help="Use PCGrad on clients")
+    ap.add_argument("--global_eval", action="store_true", help="Evaluate on union each round")
+    ap.add_argument("--threshold_sweep", action="store_true", help="Also compute best-EO/DP thresholds")
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--outdir", type=str, required=True)
+    args = ap.parse_args()
 
     set_seed(args.seed)
-    ensure_dir(args.outdir)
+    os.makedirs(args.outdir, exist_ok=True)
 
-    X, y, s, feature_names = get_data(args.dataset, args.sensitive_attr)
-    input_dim = X.shape[1]
-    clients = make_clients(X, y, s, args.num_clients, args.dirichlet_alpha, args.seed, input_dim)
+    X, y, s, feat_names = get_data(args.dataset, args.sensitive_attr)
 
-    model = MLPClassifier(input_dim)
-    server = Server(model, beta=args.beta)
-    trainer = Trainer(server, clients, outdir=args.outdir, sensitive_attr=args.sensitive_attr)
+    # split into clients
+    parts = dirichlet_partition(y, num_clients=args.num_clients, alpha=args.dirichlet_alpha, seed=args.seed)
+    clients = []
+    for idxs in parts:
+        clients.append((X[idxs], y[idxs], s[idxs]))
 
-    algo = build_algo(args)
-    cfg_dump = vars(args)
-    cfg_dump["n_clients_effective"] = len(clients)
-    save_json(cfg_dump, os.path.join(args.outdir, "config.json"))
+    # construct a small shared validation union for global evaluation (20%)
+    n = len(y)
+    perm = np.random.RandomState(args.seed).permutation(n)
+    val_k = max(int(0.2 * n), 50)
+    val_idx, train_idx = perm[:val_k], perm[val_k:]
+    X_val, y_val, s_val = X[val_idx], y[val_idx], s[val_idx]
 
-    hist = trainer.train(args.rounds, algo)
-    save_json(hist, os.path.join(args.outdir, "history.json"))
+    # init model
+    model = MLPClassifier(input_dim=X.shape[1], hidden=64, output_dim=2)
+    adv = LogitAdversary(input_dim=2)
+
+    # choose algo object (server)
+    if args.algo == "faircare":
+        server_algo = FairCareFL(
+            model_params_template=[p.detach().cpu().numpy() for p in model.parameters()],
+            q=args.q, gamma=1.0, temperature=args.temperature,
+            server_lr=args.server_lr, beta1=args.beta, beta2=0.999, eps=1e-8,
+            scaffold_c=0.0
+        )
+    elif args.algo == "fedavg":
+        server_algo = FedAvg()
+    elif args.algo == "fedprox":
+        server_algo = FedProx(mu=0.01)
+    elif args.algo == "qffl":
+        server_algo = QFFL(q=args.q)
+    elif args.algo == "afl":
+        server_algo = AFL()
+    elif args.algo == "fairfed":
+        server_algo = FairFed()
+    elif args.algo == "fedgft":
+        server_algo = FedGFT(lambdaG=args.lambdaG)
+    elif args.algo == "fairfate":
+        server_algo = FairFATE(beta=args.beta)
+    else:
+        raise ValueError(args.algo)
+
+    metrics_path = os.path.join(args.outdir, "metrics.csv")
+    if not os.path.exists(metrics_path):
+        with open(metrics_path, "w") as f:
+            f.write("round,global_accuracy,global_auroc,global_dp_gap,global_eo_gap\n")
+
+    # federated rounds
+    for r in range(1, args.rounds + 1):
+        # broadcast current weights
+        w0 = [p.detach().cpu().numpy().copy() for p in model.parameters()]
+
+        client_reports, deltas = [], []
+        for (Xi, yi, si) in clients:
+            m_i = MLPClassifier(input_dim=X.shape[1], hidden=64, output_dim=2)
+            m_i.load_state_dict(model.state_dict())
+            opt = torch.optim.Adam(m_i.parameters(), lr=args.lr)
+            rep, d = local_train(
+                m_i, adv, opt, Xi, yi, si,
+                batch_size=args.batch_size, local_epochs=args.local_epochs,
+                lambdaG=args.lambdaG, lambdaA=args.lambdaA,
+                use_pcgrad=args.pcgrad, device="cpu"
+            )
+            client_reports.append(rep)
+            deltas.append(d["delta"])
+
+        # server aggregation
+        new_params = server_algo.aggregate(w0, deltas, client_reports)
+
+        # update model
+        with torch.no_grad():
+            for p, npar in zip(model.parameters(), new_params):
+                p.copy_(torch.tensor(npar, dtype=p.dtype))
+
+        # global union eval
+        if args.global_eval:
+            res = evaluate_union(model, X_val, y_val, s_val, threshold=0.5)
+            with open(metrics_path, "a") as f:
+                f.write(f"{r},{res['accuracy']:.6f},{res['auroc']:.6f},{res['dp_gap']:.6f},{res['eo_gap']:.6f}\n")
+
+    # optional sweep and summary JSON
+    summary = {}
+    if args.global_eval:
+        summary["final"] = evaluate_union(model, X_val, y_val, s_val, threshold=0.5)
+        if args.threshold_sweep:
+            summary["sweep"] = evaluate_with_sweep(model, X_val, y_val, s_val)
+    with open(os.path.join(args.outdir, "history.json"), "w") as f:
+        json.dump(summary, f, indent=2)
 
 if __name__ == "__main__":
     main()
