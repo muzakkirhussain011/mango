@@ -11,7 +11,7 @@ def evaluate_union(model: nn.Module,
                    threshold: float = 0.5,
                    device: str = "cpu") -> Dict[str, float]:
     """
-    Evaluate the *global* model on the union validation split and compute
+    Evaluate the global model on a *union* validation split and compute
     global Accuracy, AUROC, DP/EO/FPR gaps, and ECE at a fixed threshold.
     """
     model.eval().to(device)
