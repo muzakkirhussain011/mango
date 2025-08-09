@@ -1,0 +1,16 @@
+# .gitignore
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+build/
+dist/
+*.egg-info/
+runs/
+paper/figs/*.png
+paper/figs/*.pdf
+paper/tables/*.tex
+.cache/
+.ipynb_checkpoints/
