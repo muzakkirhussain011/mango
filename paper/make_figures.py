@@ -3,12 +3,12 @@ import os, argparse, csv
 import matplotlib.pyplot as plt
 
 def load_csv(path):
-    rows = []
+    out = []
     with open(path, "r") as f:
         r = csv.DictReader(f)
         for row in r:
-            rows.append({k: float(v) if k!="round" else int(v) for k,v in row.items()})
-    return rows
+            out.append({k: (int(v) if k=="round" else float(v)) for k,v in row.items()})
+    return out
 
 def main():
     ap = argparse.ArgumentParser()
@@ -16,9 +16,11 @@ def main():
     ap.add_argument("--outdir", required=True)
     args = ap.parse_args()
     os.makedirs(args.outdir, exist_ok=True)
+
     metrics = load_csv(os.path.join(args.indir, "metrics.csv"))
     rounds = [m["round"] for m in metrics]
     acc = [m["global_accuracy"] for m in metrics]
+    auroc = [m["global_auroc"] for m in metrics]
     dp = [m["global_dp_gap"] for m in metrics]
     eo = [m["global_eo_gap"] for m in metrics]
 
@@ -26,6 +28,11 @@ def main():
     plt.plot(rounds, acc, marker="o")
     plt.xlabel("Round"); plt.ylabel("Accuracy"); plt.title("Global Accuracy vs Round")
     plt.savefig(os.path.join(args.outdir, "accuracy_vs_round.png"), bbox_inches="tight")
+
+    plt.figure()
+    plt.plot(rounds, auroc, marker="o")
+    plt.xlabel("Round"); plt.ylabel("AUROC"); plt.title("Global AUROC vs Round")
+    plt.savefig(os.path.join(args.outdir, "auroc_vs_round.png"), bbox_inches="tight")
 
     plt.figure()
     plt.plot(rounds, dp, marker="o", label="DP gap")
