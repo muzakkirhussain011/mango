@@ -1,35 +1,73 @@
 # faircare/algos/aggregator.py
+import math
+from typing import Dict, List, Tuple
 import numpy as np
 
-def normalize_weights(w):
-    w = np.asarray(w, dtype=float)
-    w = np.clip(w, 1e-9, None)
-    w = w / w.sum()
-    return w.tolist()
+class FedAvgAggregator:
+    """Baseline FedAvg aggregator kept for compatibility."""
+    def __call__(self, weights: List[Tuple[np.ndarray, float]]):
+        # weights: list of (delta, client_weight)
+        total = sum(w for _, w in weights) + 1e-12
+        agg = sum(delta * (w / total) for delta, w in weights)
+        return agg
 
-def weights_fedavg(payloads):
-    n = len(payloads)
-    return normalize_weights([1.0/n]*n)
+class FairnessAwareWeights:
+    """
+    Compute client aggregation weights with fairness-awareness and temperature.
+    w_i ∝ (loss_i)^q * 1/(gap_i + eps)^(gamma)
+    Then normalized; supports clipping to avoid domination.
+    """
+    def __init__(self, q: float = 0.5, gamma: float = 1.0, eps: float = 1e-3,
+                 clip: float = 5.0, temperature: float = 1.0):
+        self.q = q
+        self.gamma = gamma
+        self.eps = eps
+        self.clip = clip
+        self.temperature = temperature
 
-def weights_qffl(payloads, q: float):
-    losses = [max(1e-6, pl["val_loss"]) for pl in payloads]
-    raw = [l**q for l in losses]
-    return normalize_weights(raw)
+    def __call__(self, client_reports: List[Dict]) -> np.ndarray:
+        # Each report should contain: {"loss": float, "gap": float, "num_samples": int}
+        losses = np.array([max(r.get("loss", 1e-6), 1e-6) for r in client_reports], dtype=np.float64)
+        gaps = np.array([max(r.get("gap", 0.0), 0.0) for r in client_reports], dtype=np.float64)
 
-def weights_fairfed(payloads):
-    gaps = [pl["summary"]["dp_gap"] + pl["summary"]["eo_gap"] for pl in payloads]
-    raw = [1.0/max(1e-6, g) for g in gaps]
-    return normalize_weights(raw)
+        raw = (losses ** self.q) * (1.0 / np.maximum(gaps, self.eps) ** self.gamma)
+        raw = np.clip(raw, 1e-8, self.clip)
+        # temperature softmax for stability
+        logits = np.log(raw + 1e-12)
+        w = np.exp(logits / max(self.temperature, 1e-6))
+        w = w / (w.sum() + 1e-12)
+        return w
 
-def weights_afl(payloads, boost=3.0):
-    losses = [pl["val_loss"] for pl in payloads]
-    worst = int(np.argmax(losses))
-    w = np.ones(len(payloads))
-    w[worst] = w[worst]*boost
-    return normalize_weights(w)
+class FedAdamAggregator:
+    """
+    FedOpt / FedAdam server optimizer (Reddi et al., ICLR'21).
+    Keeps first/second moments of the *aggregated* delta; supports fairness-aware momentum.
+    """
+    def __init__(self, dim: int, lr: float = 1.0, beta1: float = 0.9, beta2: float = 0.999,
+                 eps: float = 1e-8):
+        self.m = np.zeros(dim, dtype=np.float64)
+        self.v = np.zeros(dim, dtype=np.float64)
+        self.t = 0
+        self.lr = lr
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.eps = eps
 
-def weights_faircare(payloads, q: float):
-    losses = [max(1e-6, pl["val_loss"]) for pl in payloads]
-    gaps = [pl["summary"]["dp_gap"] + pl["summary"]["eo_gap"] for pl in payloads]
-    raw = [(l**q)/(g+1e-6) for l,g in zip(losses, gaps)]
-    return normalize_weights(raw)
+    def step(self, agg_delta: np.ndarray) -> np.ndarray:
+        self.t += 1
+        self.m = self.beta1 * self.m + (1 - self.beta1) * agg_delta
+        self.v = self.beta2 * self.v + (1 - self.beta2) * (agg_delta ** 2)
+        mhat = self.m / (1 - self.beta1 ** self.t)
+        vhat = self.v / (1 - self.beta2 ** self.t)
+        return self.lr * (mhat / (np.sqrt(vhat) + self.eps))
+
+def flatten_params(param_list: List[np.ndarray]) -> np.ndarray:
+    return np.concatenate([p.ravel() for p in param_list]).astype(np.float64, copy=False)
+
+def unflatten_params(flat: np.ndarray, template: List[np.ndarray]) -> List[np.ndarray]:
+    out, idx = [], 0
+    for t in template:
+        size = t.size
+        out.append(flat[idx:idx+size].reshape(t.shape))
+        idx += size
+    return out
