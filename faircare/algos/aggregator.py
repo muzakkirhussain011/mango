@@ -1,6 +1,6 @@
 # faircare/algos/aggregator.py
 import math
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Sequence
 import numpy as np
 
 class FedAvgAggregator:
@@ -10,6 +10,90 @@ class FedAvgAggregator:
         total = sum(w for _, w in weights) + 1e-12
         agg = sum(delta * (w / total) for delta, w in weights)
         return agg
+
+
+def _extract_reports(payloads: Sequence[Dict]) -> List[Dict]:
+    """Normalize a variety of legacy payload formats.
+
+    Returns a list of dictionaries with ``loss``, ``gap`` and ``num_samples``
+    keys populated (missing values default to ``0``).
+    """
+
+    reports: List[Dict] = []
+    for pl in payloads:
+        if isinstance(pl, dict):
+            rep = pl.get("report", pl)
+        elif isinstance(pl, (list, tuple)) and pl and isinstance(pl[0], dict):
+            rep = pl[0]
+        else:
+            raise TypeError("Unsupported payload format for weighting")
+
+        loss = rep.get("loss", rep.get("val_loss", rep.get("train_loss", 0.0)))
+        gap = rep.get("gap")
+        if gap is None:
+            summary = rep.get("summary", {})
+            if isinstance(summary, dict):
+                gap = summary.get("dp_gap", summary.get("eo_gap", 0.0))
+            else:
+                gap = 0.0
+        num = rep.get("num_samples", rep.get("n", rep.get("num", 0)))
+        reports.append({"loss": float(loss), "gap": float(gap), "num_samples": int(num)})
+    return reports
+
+
+def weights_fedavg(payloads: Sequence[Dict]) -> np.ndarray:
+    """Standard FedAvg weighting based on client sample counts."""
+
+    reps = _extract_reports(payloads)
+    ns = np.array([r.get("num_samples", 0) for r in reps], dtype=np.float64)
+    total = ns.sum() + 1e-12
+    return ns / total
+
+
+def weights_fairfed(payloads: Sequence[Dict], eps: float = 1e-6) -> np.ndarray:
+    """FairFed-style weights favouring clients with larger fairness gaps."""
+
+    reps = _extract_reports(payloads)
+    gaps = np.array([r.get("gap", 0.0) for r in reps], dtype=np.float64)
+    inv = 1.0 / (np.maximum(gaps, eps))
+    inv = inv / (inv.sum() + 1e-12)
+    return inv
+
+
+def weights_qffl(payloads: Sequence[Dict], q: float) -> np.ndarray:
+    """q-FFL weighting – emphasises high-loss clients."""
+
+    reps = _extract_reports(payloads)
+    losses = np.array([max(r.get("loss", 1e-12), 1e-12) for r in reps], dtype=np.float64)
+    w = losses ** q
+    return w / (w.sum() + 1e-12)
+
+
+def weights_afl(payloads: Sequence[Dict], boost: float = 5.0) -> np.ndarray:
+    """AFL weighting using an exponential boost on client losses."""
+
+    reps = _extract_reports(payloads)
+    losses = np.array([r.get("loss", 0.0) for r in reps], dtype=np.float64)
+    w = np.exp(boost * losses)
+    return w / (w.sum() + 1e-12)
+
+def normalize_weights(weights: Sequence[float]) -> np.ndarray:
+    """Normalize a list of weights so they sum to one."""
+    w = np.asarray(list(weights), dtype=np.float64)
+    return w / (w.sum() + 1e-12)
+
+def weights_faircare(
+    payloads: Sequence[Dict],
+    q: float = 0.5,
+    gamma: float = 1.0,
+    eps: float = 1e-3,
+    clip: float = 5.0,
+    temperature: float = 1.0,
+) -> np.ndarray:
+    """Legacy FairCare weighting helper."""
+    reps = _extract_reports(payloads)
+    fw = FairnessAwareWeights(q=q, gamma=gamma, eps=eps, clip=clip, temperature=temperature)
+    return fw(reps)
 
 class FairnessAwareWeights:
     """
