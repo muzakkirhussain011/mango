@@ -1,0 +1,39 @@
+# .github/workflows/ci.yml
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+      - name: Lint (syntax)
+        run: python - <<'PY'
+import compileall, sys
+ok = compileall.compile_dir('faircare', maxlevels=10, quiet=1)
+sys.exit(0 if ok else 1)
+PY
+      - name: Unit tests
+        run: pytest -q
+      - name: Smoke run (CPU, 1 round)
+        run: |
+          python -m faircare.experiments.run_experiments --dataset heart --algo faircare \
+            --num_clients 3 --rounds 1 --local_epochs 1 --batch_size 64 --lr 1e-3 \
+            --lambdaG 1.0 --lambdaC 0.5 --lambdaA 0.2 --q 0.2 --beta 0.8 \
+            --dirichlet_alpha 0.7 --sensitive_attr sex --outdir runs/smoke_heart/
+      - name: Build paper assets (smoke)
+        run: |
+          python -m faircare.paper.make_figures --indir runs/smoke_heart/ --outdir paper/figs/
+          python -m faircare.paper.tables --indir runs/smoke_heart/ --outdir paper/tables/
