@@ -10,13 +10,6 @@ from faircare.models.adversary import LogitAdversary
 from faircare.core.client import local_train
 from faircare.core.evaluation import evaluate_union, evaluate_with_sweep
 from faircare.algos.faircare_fl import FairCareFL
-from faircare.algos.fedavg import FedAvg
-from faircare.algos.fedprox import FedProx
-from faircare.algos.qffl import QFFL
-from faircare.algos.afl import AFL
-from faircare.algos.fairfed import FairFed
-from faircare.algos.fedgft import FedGFT
-from faircare.algos.fairfate import FairFATE
 
 def get_data(name: str, sensitive: str):
     name = name.lower()
@@ -62,8 +55,8 @@ def main():
 
     X, y, s, feat_names = get_data(args.dataset, args.sensitive_attr)
 
-    # split into clients
-    parts = dirichlet_partition(y, num_clients=args.num_clients, alpha=args.dirichlet_alpha, seed=args.seed)
+    # split into clients - FIX: pass len(y) instead of y
+    parts = dirichlet_partition(len(y), num_clients=args.num_clients, alpha=args.dirichlet_alpha, seed=args.seed)
     clients = []
     for idxs in parts:
         clients.append((X[idxs], y[idxs], s[idxs]))
@@ -129,7 +122,39 @@ def main():
             deltas.append(d["delta"])
 
         # server aggregation
-        new_params = server_algo.aggregate(w0, deltas, client_reports)
+        if args.algo == "faircare":
+            # FairCareFL has its own aggregate method
+            new_params = server_algo.aggregate(w0, deltas, client_reports)
+        else:
+            # Other algorithms use simple weighted averaging
+            from faircare.algos import aggregator
+            
+            # Get weights based on algorithm
+            if args.algo == "fedavg":
+                weights = aggregator.weights_fedavg(client_reports)
+            elif args.algo == "fedprox":
+                weights = aggregator.weights_fedavg(client_reports)
+            elif args.algo == "qffl":
+                weights = aggregator.weights_qffl(client_reports, args.q)
+            elif args.algo == "afl":
+                weights = aggregator.weights_afl(client_reports, boost=3.0)
+            elif args.algo == "fairfed":
+                weights = aggregator.weights_fairfed(client_reports)
+            elif args.algo == "fedgft":
+                weights = aggregator.weights_fedavg(client_reports)
+            elif args.algo == "fairfate":
+                weights = aggregator.weights_fairfed(client_reports)
+            else:
+                weights = aggregator.weights_fedavg(client_reports)
+            
+            # Simple weighted average of deltas
+            import torch
+            new_params = []
+            for i in range(len(w0)):
+                weighted_delta = np.zeros_like(deltas[0][i])
+                for w, delta in zip(weights, deltas):
+                    weighted_delta += w * delta[i]
+                new_params.append(w0[i] + weighted_delta)
 
         # update model
         with torch.no_grad():
