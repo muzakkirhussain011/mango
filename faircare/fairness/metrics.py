@@ -1,5 +1,5 @@
 # faircare/fairness/metrics.py
-from typing import Dict, Any, Tuple
+from typing import Dict, Any
 import numpy as np
 from sklearn.metrics import roc_auc_score
 
@@ -97,3 +97,29 @@ def threshold_sweep(y_true: np.ndarray, y_prob: np.ndarray, s: np.ndarray) -> Di
         "best_eo":  {"threshold": float(best_eo[0]),  **best_eo[1]},
         "best_dp":  {"threshold": float(best_dp[0]),  **best_dp[1]},
     }
+
+# Backwards compatibility exports
+def dp_gap(*args) -> float:
+    """Demographic parity gap with flexible signature."""
+    if len(args) == 2:  # (y_pred, s)
+        y_pred, s = args
+    elif len(args) == 3:  # (y_true, y_pred, s)
+        _, y_pred, s = args
+    else:
+        raise TypeError("dp_gap expects (y_pred, s) or (y_true, y_pred, s)")
+    return _dp_gap(np.asarray(y_pred), np.asarray(s))
+
+eo_gap = _eo_gap
+fpr_gap = _fpr_gap
+calibration_ece = expected_calibration_error
+confusion_by_group = _confusion_by_group
+
+__all__ = [
+    "dp_gap",
+    "eo_gap",
+    "fpr_gap",
+    "calibration_ece",
+    "confusion_by_group",
+    "compute_metrics",
+    "threshold_sweep",
+]
