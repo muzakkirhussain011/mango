@@ -1,0 +1,14 @@
+# faircare/experiments/configs/default.yaml
+seed: 42
+num_clients: 5
+rounds: 5
+local_epochs: 1
+batch_size: 64
+lr: 0.001
+beta: 0.9
+lambdaG: 2.0
+lambdaC: 0.5
+lambdaA: 0.5
+q: 0.5
+dirichlet_alpha: 0.5
+sensitive_attr: sex
