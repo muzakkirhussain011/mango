@@ -69,8 +69,8 @@ def main():
     X_val, y_val, s_val = X[val_idx], y[val_idx], s[val_idx]
 
     # init model
-    model = MLPClassifier(input_dim=X.shape[1], hidden=64, output_dim=2)
-    adv = LogitAdversary(input_dim=2)
+    model = MLPClassifier(in_dim=X.shape[1], hidden=64, out_dim=2)
+    adv = LogitAdversary(in_dim=2)
 
     # choose algo object (server)
     if args.algo == "faircare":
@@ -109,7 +109,7 @@ def main():
 
         client_reports, deltas = [], []
         for (Xi, yi, si) in clients:
-            m_i = MLPClassifier(input_dim=X.shape[1], hidden=64, output_dim=2)
+            m_i = MLPClassifier(in_dim=X.shape[1], hidden=64, out_dim=2)
             m_i.load_state_dict(model.state_dict())
             opt = torch.optim.Adam(m_i.parameters(), lr=args.lr)
             rep, d = local_train(
