@@ -148,7 +148,6 @@ def main():
                 weights = aggregator.weights_fedavg(client_reports)
             
             # Simple weighted average of deltas
-            import torch
             new_params = []
             for i in range(len(w0)):
                 weighted_delta = np.zeros_like(deltas[0][i])
