@@ -70,7 +70,7 @@ def main():
 
     # init model
     model = MLPClassifier(in_dim=X.shape[1], hidden=64, out_dim=2)
-    adv = LogitAdversary(in_dim=2)
+    adv = LogitAdversary(in_dim=2, out_dim=1)  # Binary classification for sensitive attribute
 
     # choose algo object (server)
     if args.algo == "faircare":
