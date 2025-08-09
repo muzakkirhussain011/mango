@@ -1,0 +1,10 @@
+# faircare/experiments/configs/datasets.yaml
+heart:
+  name: heart
+  sensitive_attr: sex
+adult:
+  name: adult
+  sensitive_attr: sex
+synth:
+  name: synth
+  sensitive_attr: s
