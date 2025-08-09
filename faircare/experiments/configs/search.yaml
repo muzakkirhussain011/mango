@@ -1,0 +1,6 @@
+# faircare/experiments/configs/search.yaml
+lambdaG: [0.0, 1.0, 2.0, 3.0]
+lambdaC: [0.0, 0.5, 1.0]
+lambdaA: [0.0, 0.2, 0.5]
+q: [0.0, 0.3, 0.5, 1.0]
+beta: [0.0, 0.8, 0.9]
