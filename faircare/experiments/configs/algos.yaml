@@ -1,9 +1,9 @@
-# faircare/experiments/configs/algos.yaml
-fedavg:   { algo: fedavg }
-fedprox:  { algo: fedprox }
-qffl:     { algo: qffl, q: 0.5 }
-afl:      { algo: afl }
-fairfed:  { algo: fairfed }
-fedgft:   { algo: fedgft, lambdaG: 2.0 }
-fairfate: { algo: fairfate }
-faircare: { algo: faircare, lambdaG: 2.0, lambdaC: 0.5, lambdaA: 0.5, q: 0.5, beta: 0.9 }
+algos:
+  - fedavg
+  - fedprox
+  - afl
+  - qffl
+  - fairfed
+  - fedgft
+  - fairfate
+  - faircare_fl
