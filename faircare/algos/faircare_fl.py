@@ -1,31 +1,27 @@
-from __future__ import annotations
-from typing import List, Dict, Any
-import numpy as np
-from .aggregator import BaseAggregator
+# faircare/algos/faircare_f1.py
+from dataclasses import dataclass
+from typing import Dict, Any
 
-class FairCareAggregator(BaseAggregator):
-    """
-    Unified multi-level fairness:
-    - 'factor' encodes server-side importance (client accuracy gap + group gap attribution).
-    - We combine client-level dispersion and group-level deficit into a single scaling.
-    """
-    def __init__(self, sens_present: bool, alpha_c: float = 0.5, alpha_g: float = 0.5):
-        super().__init__(sens_present)
-        self.alpha_c = alpha_c
-        self.alpha_g = alpha_g
+@dataclass
+class FairCareF1Config:
+    name: str = "faircare_f1"
+    local_epochs: int = 1
+    lr: float = 1e-2
+    weight_decay: float = 0.0
+    beta_momentum: float = 0.7
+    # fairness constraints
+    target_eo: float = 0.03
+    target_sp: float = 0.03
+    dual_step: float = 0.05  # step for dual ascent
+    max_dual: float = 10.0
+    # server-side reweighting / sampling
+    client_reweight_gamma: float = 0.2
+    client_resample_frac: float = 1.0  # cross-silo: often 1.0
+    # post-processing thresholds
+    postprocess_equalized_odds: bool = True
+    # stability
+    max_weight_scale: float = 2.0
+    min_weight_scale: float = 0.25
 
-    def compute_weights(self, local_meta: List[Dict[str, Any]]) -> List[float]:
-        n = len(local_meta)
-        f = np.array([m["factor"] for m in local_meta])  # lower -> more underperforming
-        # convert into importance: higher for lower factor
-        imp = (self.alpha_c + self.alpha_g) * (f.max() - f + 1e-6)
-        imp = imp + 1.0  # keep bounded away from zero
-        imp = imp / imp.sum()
-        return imp.tolist()
-
-    def client_weights_signal(self) -> List[float]:
-        # return a neutral signal; server fills with concrete values per round
-        return [1.0 for _ in range(10)]
-
-def make_aggregator(sens_present: bool) -> BaseAggregator:
-    return FairCareAggregator(sens_present)
+    def to_dict(self) -> Dict[str, Any]:
+        return self.__dict__
