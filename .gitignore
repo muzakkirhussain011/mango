@@ -1,5 +1,5 @@
-# .gitignore
 __pycache__/
+.ipynb_checkpoints/
 *.pyc
 *.pyo
 *.pyd
@@ -8,9 +8,11 @@ __pycache__/
 build/
 dist/
 *.egg-info/
-runs/
-paper/figs/*.png
-paper/figs/*.pdf
-paper/tables/*.tex
 .cache/
-.ipynb_checkpoints/
+.mypy_cache/
+.pytest_cache/
+*.log
+data/
+reports/
+paper/figs/*
+paper/tables/*
