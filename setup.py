@@ -1,9 +1,12 @@
-# setup.py
 from setuptools import setup, find_packages
+
 setup(
-    name="faircare-fl",
-    version="1.0.1",
-    description="FairCare-FL: Next-Gen Fair Federated Learning (Healthcare)",
-    packages=find_packages(exclude=("tests", "paper", "runs")),
+    name="faircare",
+    version="1.0.0",
+    description="FairCare-FL: Unified Fair Federated Learning for Healthcare",
+    author="Your Name",
+    packages=find_packages(exclude=("tests", "paper")),
     include_package_data=True,
+    install_requires=[],
+    python_requires=">=3.9",
 )
