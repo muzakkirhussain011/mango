@@ -1,33 +1,36 @@
-# faircare/data/adult.py
-import io, requests, pandas as pd, numpy as np
+from __future__ import annotations
+import numpy as np
+import pandas as pd
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.datasets import fetch_openml
 
-UCI_BASE = "https://archive.ics.uci.edu/ml/machine-learning-databases/adult/"
-TRAIN = UCI_BASE + "adult.data"
-TEST  = UCI_BASE + "adult.test"
+def load_adult(cache_dir: str, sensitive: str):
+    """
+    Returns X (float), y (int), a (int sensitive group)
+    sensitive in {"sex","race"}
+    """
+    ds = fetch_openml(name="adult", version=2, as_frame=True, parser="auto")
+    df = ds.frame.dropna(subset=["class"])
+    y = (df["class"] == ">50K").astype(int).to_numpy()
 
-ADULT_COLUMNS = [
- "age","workclass","fnlwgt","education","education-num","marital-status","occupation",
- "relationship","race","sex","capital-gain","capital-loss","hours-per-week","native-country","income"
-]
+    sens_map = {"sex": "sex", "race": "race"}
+    sens_col = sens_map.get(sensitive, "sex")
+    a = pd.factorize(df[sens_col])[0]
 
-def _download(url):
-    r = requests.get(url, timeout=60)
-    r.raise_for_status()
-    return r.text
+    X_df = df.drop(columns=["class", sens_col])
+    cat_cols = X_df.select_dtypes(include=["category","object"]).columns.tolist()
+    num_cols = X_df.select_dtypes(include=["number","float","int"]).columns.tolist()
 
-def load_adult(target="income", sensitive="sex"):
-    train = pd.read_csv(io.StringIO(_download(TRAIN)), header=None, names=ADULT_COLUMNS, na_values=" ?").dropna()
-    test  = pd.read_csv(io.StringIO(_download(TEST)), header=None, names=ADULT_COLUMNS, skiprows=1, na_values=" ?").dropna()
-    df = pd.concat([train, test], axis=0, ignore_index=True)
-    df[target] = df[target].str.strip().replace({">50K.":">50K", "<=50K.":"<=50K"})
-    y = (df[target].str.contains(">50K")).astype(int).values
-    s = (df[sensitive].str.strip().map({"Female":0,"Male":1})).astype(int).values
-    X_cat = df.select_dtypes(include=["object"]).drop(columns=[target]).fillna("NA")
-    X_num = df.select_dtypes(exclude=["object"]).astype("float32")
-    enc = OneHotEncoder(handle_unknown="ignore", sparse=False)
-    X_cat_enc = enc.fit_transform(X_cat)
-    scl = StandardScaler()
-    X_num_s = scl.fit_transform(X_num).astype("float32")
-    X = np.hstack([X_num_s, X_cat_enc]).astype("float32")
-    return X, y, s, list(X_num.columns)+list(enc.get_feature_names_out(X_cat.columns))
+    pre = ColumnTransformer(
+        transformers=[
+            ("cat", Pipeline(steps=[("impute", SimpleImputer(strategy="most_frequent")),
+                                   ("onehot", OneHotEncoder(handle_unknown="ignore"))]), cat_cols),
+            ("num", Pipeline(steps=[("impute", SimpleImputer(strategy="median")),
+                                   ("scale", StandardScaler())]), num_cols),
+        ]
+    )
+    X = pre.fit_transform(X_df).astype(np.float32)
+    return X.toarray() if hasattr(X, "toarray") else X, y.astype(int), a.astype(int)
