@@ -1,15 +1,8 @@
-# tests/test_secure_agg.py
-import numpy as np
-from faircare.core.secure_agg import mask_vector, unmask_sum
+import torch
+from faircare.core.secure_agg import SecureAggregator
 
-def test_mask_unmask_sum():
-    rng = np.random.default_rng(0)
-    vs = []
-    masks = []
-    raw = []
-    for _ in range(5):
-        v = rng.integers(0, 10, size=8, dtype=np.int64)
-        mv, m = mask_vector(v, rng)
-        vs.append(mv); masks.append(m); raw.append(v)
-    rec = unmask_sum(np.stack(vs), np.stack(masks))
-    assert np.all(rec == np.sum(np.stack(raw), axis=0))
+def test_secure_agg_mean():
+    agg = SecureAggregator()
+    a = [torch.ones(5), 2*torch.ones(5), 3*torch.ones(5)]
+    out = agg.aggregate(a)
+    assert torch.allclose(out, torch.tensor([2.0]*5))
