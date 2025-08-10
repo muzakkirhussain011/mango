@@ -1,39 +1,30 @@
-# faircare/core/evaluation.py
-from typing import Dict, Any
-import numpy as np
+from __future__ import annotations
+from typing import Dict, Any, Tuple
 import torch
 from torch import nn
-from faircare.fairness.metrics import compute_metrics, threshold_sweep
+from .utils import Batch
+from ..fairness.metrics import group_confusion_counts, fairness_report
 
 @torch.no_grad()
-def evaluate_union(model: nn.Module,
-                   X: np.ndarray, y: np.ndarray, s: np.ndarray,
-                   threshold: float = 0.5,
-                   device: str = "cpu") -> Dict[str, float]:
-    """
-    Evaluate the global model on a *union* validation split and compute
-    global Accuracy, AUROC, DP/EO/FPR gaps, and ECE at a fixed threshold.
-    """
-    model.eval().to(device)
-    X_t = torch.tensor(X, dtype=torch.float32, device=device)
-    logits = model(X_t)                           # [N, 2]
-    probs = torch.softmax(logits, dim=1)[:, 1]   # P(y=1)
-    y_prob = probs.detach().cpu().numpy()
-    return compute_metrics(y_true=y, y_prob=y_prob, s=s, threshold=threshold)
-
-@torch.no_grad()
-def evaluate_with_sweep(model: nn.Module,
-                        X: np.ndarray, y: np.ndarray, s: np.ndarray,
-                        device: str = "cpu") -> Dict[str, Any]:
-    """
-    Sweep thresholds in [0.05, 0.95] and return:
-      - best_acc: highest accuracy config
-      - best_eo : minimal equal-opportunity gap config
-      - best_dp : minimal demographic parity gap config
-    """
-    model.eval().to(device)
-    X_t = torch.tensor(X, dtype=torch.float32, device=device)
-    logits = model(X_t)                           # [N, 2]
-    probs = torch.softmax(logits, dim=1)[:, 1]
-    y_prob = probs.detach().cpu().numpy()
-    return threshold_sweep(y_true=y, y_prob=y_prob, s=s)
+def evaluate(model: nn.Module, loader, device, sens_present: bool) -> Dict[str, Any]:
+    model.eval()
+    n, correct = 0, 0
+    agg = {}
+    for (x, y, a) in loader:
+        batch = Batch(torch.as_tensor(x, dtype=torch.float32),
+                      torch.as_tensor(y, dtype=torch.long),
+                      torch.as_tensor(a, dtype=torch.long) if sens_present else None)
+        batch = Batch(batch.x.to(device), batch.y.to(device), None if batch.a is None else batch.a.to(device))
+        logits = model(batch.x)
+        pred = torch.argmax(logits, dim=1)
+        correct += (pred == batch.y).sum().item()
+        n += batch.y.numel()
+        if sens_present:
+            # accumulate confusion counts by group
+            counts = group_confusion_counts(pred.cpu(), batch.y.cpu(), batch.a.cpu())
+            for k, v in counts.items():
+                agg[k] = agg.get(k, 0) + v
+    acc = correct / max(n, 1)
+    report = fairness_report(agg) if sens_present else {}
+    report["accuracy"] = acc
+    return report
