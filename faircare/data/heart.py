@@ -1,53 +1,22 @@
-# faircare/data/heart.py
+from __future__ import annotations
 import numpy as np
 import pandas as pd
+from sklearn.datasets import fetch_openml
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
 
-def load_heart():
-    """
-    Load the UCI Heart Disease (Cleveland) dataset via the official ucimlrepo API.
-    - Converts multiclass 'num' target (0..4) to binary: 1 = disease present (num>0), 0 = none.
-    - Coerces all features to numeric, drops rows with missing (e.g., '?' in 'ca'/'thal').
-    - Returns standardized float32 features, binary labels, sensitive attr 'sex' (0/1), and feature names.
-    """
-    try:
-        from ucimlrepo import fetch_ucirepo  # official UCI loader
-    except Exception as e:
-        raise RuntimeError(
-            "ucimlrepo is required for loading the UCI Heart dataset. "
-            "Install it with: pip install ucimlrepo"
-        ) from e
-
-    heart = fetch_ucirepo(id=45)  # UCI 'Heart Disease' (Cleveland) dataset
-    X_df = heart.data.features.copy()
-    y_df = heart.data.targets.copy()
-
-    # Target: 'num' (0..4). Binarize: >0 => 1 (disease), else 0.
-    if "num" not in y_df.columns:
-        if "target" in y_df.columns:
-            y = y_df["target"].astype(int).values
-        else:
-            raise RuntimeError("Could not find 'num' or 'target' column in UCI Heart targets.")
+def load_heart(cache_dir: str, sensitive: str):
+    # OpenML "heart" (id 53). Binary target "class"
+    ds = fetch_openml(name="heart", version=1, as_frame=True, parser="auto")
+    df = ds.frame.dropna(subset=["class"])
+    y = (df["class"] == "present").astype(int).to_numpy()
+    # choose sensitive attr: "sex" exists as 0/1; else use age bucket
+    if "sex" in df.columns and sensitive == "sex":
+        a = df["sex"].astype(int).to_numpy()
+        X = df.drop(columns=["class", "sex"]).to_numpy()
     else:
-        y = (pd.to_numeric(y_df["num"], errors="coerce").fillna(0) > 0).astype(int).values
-
-    # Coerce features to numeric; UCI files may have '?' strings.
-    for c in X_df.columns:
-        X_df[c] = pd.to_numeric(X_df[c], errors="coerce")
-
-    # Drop rows with missing values
-    mask = ~X_df.isna().any(axis=1)
-    X_df = X_df.loc[mask].reset_index(drop=True)
-    y = y[mask.values]
-
-    # Sensitive attribute: 'sex' (1 = male, 0 = female)
-    if "sex" not in X_df.columns:
-        raise RuntimeError("Expected 'sex' in UCI Heart features, but it was not found.")
-    s = X_df["sex"].astype(int).values
-
-    # Standardize features
-    X = X_df.values.astype("float32")
-    X = StandardScaler().fit_transform(X).astype("float32")
-
-    feature_names = list(X_df.columns)
-    return X, y, s, feature_names
+        age = df["age"].astype(float)
+        a = (age >= age.median()).astype(int).to_numpy()
+        X = df.drop(columns=["class", "age"]).to_numpy()
+    X = StandardScaler().fit_transform(X).astype(np.float32)
+    return X, y.astype(int), a.astype(int)
