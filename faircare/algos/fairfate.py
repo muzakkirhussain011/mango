@@ -1,15 +1,6 @@
-# faircare/algos/fairfate.py
-from dataclasses import dataclass
-from ..core.client import ClientConfig
-from .aggregator import weights_fairfed
+from __future__ import annotations
+from .aggregator import BaseAggregator
 
-@dataclass
-class FairFATE:
-    local_epochs: int
-    batch_size: int
-    lr: float
-    def client_cfg(self):
-        return ClientConfig(self.local_epochs, self.batch_size, self.lr, 1.0, 0.0, 0.0, use_adversary=True)
-    def compute_weights(self, payloads):
-        return weights_fairfed(payloads)
-    def use_momentum(self): return True
+def make_aggregator(sens_present: bool) -> BaseAggregator:
+    # Momentum is applied in Server via FairMomentumAggregator; here weights uniform
+    return BaseAggregator(sens_present)
