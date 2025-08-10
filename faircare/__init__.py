@@ -1,2 +1,2 @@
-# faircare/__init__.py
-__all__ = ["config"]
+__all__ = ["config", "core", "data", "fairness", "models", "algos"]
+__version__ = "1.0.0"
