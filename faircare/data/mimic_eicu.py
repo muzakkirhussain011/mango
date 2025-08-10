@@ -1,34 +1,21 @@
-# faircare/data/mimic_eicu.py
-import os, pandas as pd, numpy as np
-from sklearn.preprocessing import StandardScaler
+from __future__ import annotations
+import os
+import numpy as np
+import pandas as pd
 
-def _load_local_csvs(root, features, label, sensitive):
-    # Simple reader: expects root to contain X.csv, y.csv, s.csv OR a single data.csv with columns
-    x_path = os.path.join(root, "X.csv")
-    if os.path.exists(x_path):
-        X = pd.read_csv(x_path).values.astype("float32")
-        y = pd.read_csv(os.path.join(root,"y.csv")).values.squeeze().astype(int)
-        s = pd.read_csv(os.path.join(root,"s.csv")).values.squeeze().astype(int)
-        return X, y, s, [f"x{i}" for i in range(X.shape[1])]
-    data_path = os.path.join(root, "data.csv")
-    if os.path.exists(data_path):
-        df = pd.read_csv(data_path)
-        y = df[label].astype(int).values
-        s = df[sensitive].astype(int).values
-        X = df[features].values.astype("float32")
-        X = StandardScaler().fit_transform(X).astype("float32")
-        return X, y, s, features
-    raise FileNotFoundError(f"Expected X/y/s CSVs or a single data.csv under {root}")
-
-def load_mimic_demo():
-    root = os.getenv("MIMIC_LOCAL_DIR", None)
-    if not root:
-        raise RuntimeError("Set MIMIC_LOCAL_DIR to a local folder with demo CSVs.")
-    # Demo schema expectation: label='mortality', sensitive='sex'
-    return _load_local_csvs(root, features=None, label="mortality", sensitive="sex")
-
-def load_eicu_subset():
-    root = os.getenv("EICU_LOCAL_DIR", None)
-    if not root:
-        raise RuntimeError("Set EICU_LOCAL_DIR to a local folder with subset CSVs.")
-    return _load_local_csvs(root, features=None, label="mortality", sensitive="sex")
+def load_mimic_eicu(cache_dir: str, sensitive: str):
+    """
+    Expect a local CSV 'data/mimic_eicu.csv' with columns:
+      features... , label, sensitive
+    This avoids licensing issues. Provide your own extract.
+    """
+    path = os.path.join(cache_dir, "mimic_eicu.csv")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Expected {path}. Provide a local CSV.")
+    df = pd.read_csv(path)
+    if "label" not in df.columns or "sensitive" not in df.columns:
+        raise ValueError("CSV must include 'label' and 'sensitive' columns")
+    y = df["label"].astype(int).to_numpy()
+    a = df["sensitive"].astype(int).to_numpy()
+    X = df.drop(columns=["label","sensitive"]).to_numpy().astype(np.float32)
+    return X, y, a
