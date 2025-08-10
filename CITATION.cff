@@ -1,19 +1,9 @@
-# CITATION.cff
 cff-version: 1.2.0
-message: "If you use FairCare-FL, please cite:"
-title: "FairCare-FL: Next-Gen Fair Federated Learning (Healthcare)"
+message: "If you use this software, please cite it."
+title: "FairCare-FL: Unified Fair Federated Learning for Healthcare"
 authors:
-  - family-names: "Anonymous"
-    given-names: "Authors"
-version: "1.0.1"
-date-released: "2025-08-08"
-repository-code: "https://github.com/<YOUR-ORG>/<YOUR-REPO>"
-license: "MIT"
-preferred-citation:
-  type: article
-  title: "FairCare-FL: A Unified Multi-Level Fairness Framework for Federated Healthcare"
-  authors:
-    - family-names: "Anonymous"
-      given-names: "Authors"
-  journal: "arXiv"
-  year: 2025
+  - family-names: "Syed"
+    given-names: "Muzakkir Hussain"
+version: "1.0.0"
+date-released: "2025-08-10"
+repository-code: "https://github.com/muzakkirhussain011/mango"
