@@ -1,13 +1,12 @@
-# pyproject.toml
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[project]
-name = "faircare-fl"
-version = "1.0.1"
-description = "FairCare-FL: Next-Gen Fair Federated Learning (Healthcare)"
-authors = [{name="Anonymous"}]
-readme = "README.md"
-requires-python = ">=3.10"
-dependencies = []
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+select = ["E","F","W","I","UP"]
+ignore = ["E203","E266","E501"]
