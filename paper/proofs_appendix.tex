@@ -1,20 +1,5 @@
-% paper/proofs_appendix.tex
-\section*{Appendix: Proof Sketches}
-
-\paragraph{Assumptions.}
-Let $\ell(\theta;x,y)$ be $L$-smooth and $\mu$-lower bounded. Client heterogeneity bounded by $B$; fairness surrogates $J_G,J_C$ are Lipschitz and have unbiased estimates from per-client summaries.
-
-\paragraph{T1 (q-FFL-style client fairness).}
-For $q>0$, weighting updates by $\ell_i^q$ increases emphasis on high-loss clients.
-In expectation, the gap between worst-client loss and average loss decreases monotonically along the update path under step sizes $\eta_t \le 1/L$. (Proof follows convex aggregation inequalities.)
-
-\paragraph{T2 (FedGFT summaries).}
-For proper metrics based on confusion counts (EO, SP), the gradient of a surrogate $J_G$ depends only on aggregated $\{\mathrm{TP}_g,\mathrm{FP}_g,\mathrm{FN}_g,\mathrm{TN}_g\}_g$. Unbiased mini-batch estimates are formed by client-level counts; secure sum preserves privacy.
-
-\paragraph{T3 (Fair-momentum convergence).}
-With momentum $m_{t+1}=\beta m_t+(1-\beta)g_t$ and $g_t$ the fairness-aware gradient, the sequence $\theta_t$ converges to a stationary point with $O(1/t)$ rate in the smooth nonconvex regime (Polyak-style analysis), provided $\sum \eta_t=\infty,\,\sum\eta_t^2<\infty$.
-
-\paragraph{T4 (Agnostic robustness bound).}
-Let $J_A(\theta)=\max_{q\in\Delta_N}\mathcal L_q(\theta)-\mathcal L(\theta)$. Penalizing $\lambda_A J_A$ ensures the attained worst-case loss is within $\varepsilon\!=\!O(1/\lambda_A)$ of the agnostic optimum.
-
-\textit{Notes:} Full proofs and constants can be expanded following standard smooth analysis; see code tests for sanity checks.
+\documentclass{article}
+\begin{document}
+\section{Sketches of proofs}
+We outline stability of momentum aggregation and convergence under mild assumptions.
+\end{document}
