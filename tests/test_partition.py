@@ -1,11 +1,8 @@
-# tests/test_partition.py
-import numpy as np
 from faircare.data.partition import dirichlet_partition
+import numpy as np
 
 def test_dirichlet_partition_covers_all():
-    n = 100
-    cl = 5
-    parts = dirichlet_partition(n, cl, alpha=0.5, seed=123)
-    total = sum(len(p) for p in parts)
-    assert total == n
-    assert len(parts) == cl
+    y = np.array([0,1,0,1,0,1,0,1,1,0])
+    parts = dirichlet_partition(y, n_clients=3, alpha=0.5)
+    covered = sorted(np.concatenate(parts).tolist())
+    assert covered == list(range(len(y)))
