@@ -1,44 +1,7 @@
-# paper/make_figures.py
-import os, argparse, csv
-import matplotlib.pyplot as plt
-
-def load_csv(path):
-    out = []
-    with open(path, "r") as f:
-        r = csv.DictReader(f)
-        for row in r:
-            out.append({k: (int(v) if k=="round" else float(v)) for k,v in row.items()})
-    return out
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--indir", required=True)
-    ap.add_argument("--outdir", required=True)
-    args = ap.parse_args()
-    os.makedirs(args.outdir, exist_ok=True)
-
-    metrics = load_csv(os.path.join(args.indir, "metrics.csv"))
-    rounds = [m["round"] for m in metrics]
-    acc = [m["global_accuracy"] for m in metrics]
-    auroc = [m["global_auroc"] for m in metrics]
-    dp = [m["global_dp_gap"] for m in metrics]
-    eo = [m["global_eo_gap"] for m in metrics]
-
-    plt.figure()
-    plt.plot(rounds, acc, marker="o")
-    plt.xlabel("Round"); plt.ylabel("Accuracy"); plt.title("Global Accuracy vs Round")
-    plt.savefig(os.path.join(args.outdir, "accuracy_vs_round.png"), bbox_inches="tight")
-
-    plt.figure()
-    plt.plot(rounds, auroc, marker="o")
-    plt.xlabel("Round"); plt.ylabel("AUROC"); plt.title("Global AUROC vs Round")
-    plt.savefig(os.path.join(args.outdir, "auroc_vs_round.png"), bbox_inches="tight")
-
-    plt.figure()
-    plt.plot(rounds, dp, marker="o", label="DP gap")
-    plt.plot(rounds, eo, marker="s", label="EO gap")
-    plt.xlabel("Round"); plt.ylabel("Gap"); plt.title("Fairness Gaps vs Round"); plt.legend()
-    plt.savefig(os.path.join(args.outdir, "fairness_gaps_vs_round.png"), bbox_inches="tight")
-
-if __name__ == "__main__":
-    main()
+import json, pandas as pd, matplotlib.pyplot as plt, seaborn as sns, os
+H = json.load(open("reports/history.json"))
+df = pd.DataFrame(H)
+plt.figure()
+df["metrics"].apply(lambda m: m.get("accuracy", None)).plot()
+plt.title("Global Accuracy over Rounds")
+plt.savefig("paper/figs/accuracy.png", dpi=200, bbox_inches="tight")
