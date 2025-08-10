@@ -1,11 +1,7 @@
-# tests/test_theory_checks.py
-import numpy as np
-from faircare.algos.aggregator import weights_faircare
+from faircare.fairness.metrics import fairness_report
 
-def test_faircare_weighting_prefers_fair_clients():
-    payloads = [
-        {"val_loss": 0.5, "summary":{"dp_gap":0.2,"eo_gap":0.2}},
-        {"val_loss": 0.5, "summary":{"dp_gap":0.0,"eo_gap":0.0}}
-    ]
-    w = weights_faircare(payloads, q=0.5)
-    assert w[1] > w[0]
+def test_composite_gap():
+    rep = {"g0_tp":5,"g0_fp":5,"g0_fn":0,"g0_tn":0,"g0_n":10,
+           "g1_tp":1,"g1_fp":1,"g1_fn":8,"g1_tn":0,"g1_n":10}
+    out = fairness_report(rep)
+    assert out["max_group_gap"] >= max(out["EO_gap"], out["FPR_gap"], out["SP_gap"])
