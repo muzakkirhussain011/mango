@@ -1,14 +1,30 @@
-# faircare/experiments/configs/default.yaml
-seed: 42
-num_clients: 5
-rounds: 5
-local_epochs: 1
-batch_size: 64
-lr: 0.001
-beta: 0.9
-lambdaG: 2.0
-lambdaC: 0.5
-lambdaA: 0.5
-q: 0.5
-dirichlet_alpha: 0.5
-sensitive_attr: sex
+algorithm:
+  name: faircare_fl
+  lambda_g: 0.1
+  lambda_c: 0.05
+  beta_momentum: 0.8
+  fairness_mode: penalty
+  qffl_q: 0.0
+  fedprox_mu: 0.0
+  afl_lr: 0.05
+  max_rounds: 20
+  local_epochs: 1
+  batch_size: 128
+  lr: 0.001
+  weight_decay: 0.0
+  target_fair_gap: 0.05
+  adapt_every: 2
+  adapt_scale: 1.25
+  seed: 1337
+  device: auto
+
+data:
+  name: adult
+  n_clients: 10
+  dirichlet_alpha: 0.5
+  sensitive_feature: sex
+  cache_dir: data
+
+output_dir: reports
+log_every: 1
+eval_every: 1
