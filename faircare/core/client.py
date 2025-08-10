@@ -1,92 +1,106 @@
-from __future__ import annotations
-from typing import Dict, Any, Optional
+# faircare/core/client.py
+from typing import Any, Dict
 import torch
-from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
-from ..models.classifier import MLPClassifier
-from ..models.adversary import AdversaryLoss
-from ..fairness.metrics import group_gap_penalty
-from .utils import optimizer_for, Batch, to_device
+import torch.nn as nn
+from .utils import to_device
+from ..fairness.metrics import compute_group_counts_from_batch
 
 class Client:
-    def __init__(
-        self,
-        cid: int,
-        model: nn.Module,
-        device: torch.device,
-        lambda_g: float,
-        lambda_c: float,
-        fairness_mode: str = "penalty",
-        qffl_q: float = 0.0,
-        fedprox_mu: float = 0.0,
-        reference_model: Optional[nn.Module] = None,
-    ):
-        self.cid = cid
-        self.model = model
+    def __init__(self, model_ctor, adversary_ctor=None, device="cpu", sensitive_key="a"):
+        self.model = model_ctor().to(device)
         self.device = device
-        self.lambda_g = lambda_g
-        self.lambda_c = lambda_c
-        self.fairness_mode = fairness_mode
-        self.qffl_q = qffl_q
-        self.fedprox_mu = fedprox_mu
-        self.reference_model = reference_model
-        self.adv = AdversaryLoss() if fairness_mode == "adversarial" else None
+        self.criterion = nn.BCEWithLogitsLoss(reduction="none")
+        self.sensitive_key = sensitive_key
+        self.adversary = adversary_ctor().to(device) if adversary_ctor is not None else None
 
-    def local_train(
-        self,
-        data_loader: DataLoader,
-        epochs: int,
-        lr: float,
-        weight_decay: float,
-        sensitive_present: bool,
-        client_weight_factor: float = 1.0,
-    ) -> Dict[str, Any]:
+    def state_dict(self):
+        return self.model.state_dict()
+
+    def load_state_dict(self, sd):
+        self.model.load_state_dict(sd)
+
+    def local_train(self, loader, epochs: int, lr: float, weight_decay: float,
+                    fairness_weights: Dict[str, float], sens_present: bool) -> Dict[str, Any]:
         self.model.train()
-        opt = optimizer_for(self.model, lr, weight_decay)
-        ref_params = {k: v.detach().clone() for k, v in self.reference_model.state_dict().items()} if self.reference_model else None
-        ce = nn.CrossEntropyLoss()
+        opt = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
+        adv_opt = torch.optim.Adam(self.adversary.parameters(), lr=lr) if self.adversary is not None else None
 
+        lambda_eo = fairness_weights.get("lambda_eo", 0.0)
+        lambda_sp = fairness_weights.get("lambda_sp", 0.0)
+
+        total = 0
+        fairness_counts = {}
         for _ in range(epochs):
-            for (x, y, a) in data_loader:
-                batch = Batch(torch.as_tensor(x, dtype=torch.float32),
-                              torch.as_tensor(y, dtype=torch.long),
-                              torch.as_tensor(a, dtype=torch.long) if sensitive_present else None)
-                batch = to_device(batch, self.device)
-                logits = self.model(batch.x)
-                base_loss = ce(logits, batch.y)
+            for batch in loader:
+                x, y, a = to_device(batch["x"], self.device), to_device(batch["y"], self.device), \
+                          to_device(batch.get(self.sensitive_key, None), self.device)
 
-                # q-FFL weighting (loss^(q) scaling)
-                if self.qffl_q > 0:
-                    base_loss = base_loss * (base_loss.detach() + 1e-12) ** self.qffl_q
+                logits = self.model(x).squeeze(-1)
+                base_loss_vec = self.criterion(logits, y.float())
+                # inverse-frequency reweighting by group to raise minority gradient
+                if sens_present and a is not None:
+                    # simple 2-group case (0/1). Extendable.
+                    mask0 = (a == 0)
+                    mask1 = (a == 1)
+                    n0 = mask0.sum().clamp_min(1)
+                    n1 = mask1.sum().clamp_min(1)
+                    w0 = (n0 + n1).float() / (2.0 * n0.float())
+                    w1 = (n0 + n1).float() / (2.0 * n1.float())
+                    weights = torch.where(mask0, w0, w1)
+                else:
+                    weights = torch.ones_like(base_loss_vec)
 
-                loss = base_loss
+                base_loss = (weights * base_loss_vec).mean()
 
-                # FedProx proximal term
-                if self.fedprox_mu > 0 and self.reference_model is not None:
-                    prox = 0.0
-                    for (n, p) in self.model.named_parameters():
-                        prox += torch.norm(p - ref_params[n]) ** 2
-                    loss = loss + (self.fedprox_mu / 2.0) * prox
+                # optional adversary to remove sensitive leakage (if present)
+                adv_loss = 0.0
+                if self.adversary is not None and sens_present and a is not None:
+                    with torch.no_grad():
+                        h = torch.sigmoid(logits).detach()
+                    p_a = self.adversary(h.unsqueeze(-1))
+                    adv_crit = nn.BCEWithLogitsLoss()
+                    adv_loss = adv_crit(p_a.squeeze(-1), a.float())
 
-                # Group fairness regularizer
-                if self.lambda_g > 0 and sensitive_present:
-                    if self.fairness_mode == "penalty":
-                        # differentiable penalty on per-group loss disparity
-                        gpen = group_gap_penalty(logits, batch.y, batch.a)
-                        loss = loss + self.lambda_g * gpen
-                    else:
-                        # adversarial debiasing via gradient reversal
-                        loss = loss + self.lambda_g * self.adv(logits, batch.a)
+                # fairness surrogates: encourage equal TPR (EO) and parity (SP) by penalizing
+                # group loss differences (simple, stable proxy)
+                if sens_present and a is not None:
+                    loss0 = base_loss_vec[a == 0].mean() if (a == 0).any() else 0.0
+                    loss1 = base_loss_vec[a == 1].mean() if (a == 1).any() else 0.0
+                    eo_proxy = (loss0 - loss1).abs()
+                    sp_proxy = (torch.sigmoid(logits)[a == 0].mean() - torch.sigmoid(logits)[a == 1].mean()).abs()
+                else:
+                    eo_proxy = torch.tensor(0.0, device=self.device)
+                    sp_proxy = torch.tensor(0.0, device=self.device)
 
-                # Client "importance" proxy (align with server fairness signal)
-                if self.lambda_c > 0:
-                    loss = loss * (1.0 + self.lambda_c * (client_weight_factor - 1.0))
+                total_loss = base_loss + lambda_eo * eo_proxy + lambda_sp * sp_proxy
+                if self.adversary is not None:
+                    total_loss = total_loss - 0.1 * adv_loss  # confuse adversary
 
                 opt.zero_grad()
-                loss.backward()
+                if self.adversary is not None:
+                    adv_opt.zero_grad()
+                total_loss.backward()
                 opt.step()
+                if self.adversary is not None:
+                    # adversary maximizes ability to predict a from h
+                    with torch.no_grad():
+                        h = torch.sigmoid(self.model(x).squeeze(-1)).detach()
+                    p_a = self.adversary(h.unsqueeze(-1))
+                    adv_crit = nn.BCEWithLogitsLoss()
+                    adv_loss = adv_crit(p_a.squeeze(-1), a.float())
+                    adv_loss.backward()
+                    adv_opt.step()
 
-        # Collect local stats for fairness aggregation
-        with torch.no_grad():
-            deltas = {k: v.detach().clone() for k, v in self.model.state_dict().items()}
-        return {"cid": self.cid, "weights": deltas}
+                # bookkeeping
+                total += x.size(0)
+                # streaming fairness counts for post-processing
+                batch_counts = compute_group_counts_from_batch(logits.detach(), y, a)
+                # merge
+                for k, v in batch_counts.items():
+                    fairness_counts[k] = fairness_counts.get(k, 0) + v
+
+        return {
+            "state_dict": self.model.state_dict(),
+            "num_samples": total,
+            "fairness_counts": fairness_counts
+        }
