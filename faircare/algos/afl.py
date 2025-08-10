@@ -1,16 +1,25 @@
-# faircare/algos/afl.py
-from dataclasses import dataclass
-from ..core.client import ClientConfig
-from .aggregator import weights_afl
+from __future__ import annotations
+from typing import List, Dict, Any
+import numpy as np
+from .aggregator import BaseAggregator
 
-@dataclass
-class AFL:
-    local_epochs: int
-    batch_size: int
-    lr: float
-    boost: float = 3.0
-    def client_cfg(self):
-        return ClientConfig(self.local_epochs, self.batch_size, self.lr, 0.0, 0.0, 0.0, use_adversary=False)
-    def compute_weights(self, payloads):
-        return weights_afl(payloads, self.boost)
-    def use_momentum(self): return False
+class AFLAggregator(BaseAggregator):
+    def __init__(self, sens_present: bool, lr: float = 0.05):
+        super().__init__(sens_present)
+        self.lr = lr
+        self.dual = None  # will be initialized per round length
+
+    def compute_weights(self, local_meta: List[Dict[str, Any]]) -> List[float]:
+        n = len(local_meta)
+        if self.dual is None or len(self.dual) != n:
+            self.dual = np.ones(n) / n
+        # simplistic online ascent toward worst-client emphasis:
+        # pretend factors inversely correlated to utility -> increase weights where factor is low
+        factors = np.array([m["factor"] for m in local_meta])
+        grad = -factors  # push weight to clients with low factor
+        self.dual = np.maximum(self.dual + self.lr * grad, 1e-6)
+        self.dual = self.dual / self.dual.sum()
+        return self.dual.tolist()
+
+def make_aggregator(sens_present: bool) -> BaseAggregator:
+    return AFLAggregator(sens_present)
