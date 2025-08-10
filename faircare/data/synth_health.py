@@ -1,11 +1,12 @@
-# faircare/data/synth_health.py
+from __future__ import annotations
 import numpy as np
 
-def make_synth(n=4000, d=20, sens_ratio=0.5, seed=42):
+def make_synth_health(n=10000, p=20, seed=7):
     rng = np.random.default_rng(seed)
-    X = rng.normal(size=(n,d)).astype("float32")
-    s = rng.binomial(1, sens_ratio, size=n).astype(int)
-    w = rng.normal(size=(d,))
-    logits = X @ w + 0.8*(s==1) - 0.2*(s==0)
-    y = (logits + rng.normal(scale=0.5, size=n) > 0.0).astype(int)
-    return X, y, s, [f"x{i}" for i in range(d)]
+    X = rng.normal(size=(n, p)).astype(np.float32)
+    a = rng.integers(0, 2, size=n).astype(int)
+    w = rng.normal(size=(p, ))
+    logits = X @ w + (a * 0.8)  # induced bias
+    prob = 1 / (1 + np.exp(-logits))
+    y = (prob > 0.5).astype(int)
+    return X, y, a
