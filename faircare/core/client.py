@@ -1,106 +1,231 @@
-# faircare/core/client.py
-from typing import Any, Dict
+"""Federated learning client implementation."""
+
 import torch
 import torch.nn as nn
-from .utils import to_device
-from ..fairness.metrics import compute_group_counts_from_batch
+from torch.utils.data import DataLoader, Dataset
+from typing import Dict, Optional, Tuple, Any
+import copy
+from faircare.core.utils import compute_model_delta, create_optimizer
+from faircare.fairness.metrics import fairness_report
+
 
 class Client:
-    def __init__(self, model_ctor, adversary_ctor=None, device="cpu", sensitive_key="a"):
-        self.model = model_ctor().to(device)
-        self.device = device
-        self.criterion = nn.BCEWithLogitsLoss(reduction="none")
-        self.sensitive_key = sensitive_key
-        self.adversary = adversary_ctor().to(device) if adversary_ctor is not None else None
-
-    def state_dict(self):
-        return self.model.state_dict()
-
-    def load_state_dict(self, sd):
-        self.model.load_state_dict(sd)
-
-    def local_train(self, loader, epochs: int, lr: float, weight_decay: float,
-                    fairness_weights: Dict[str, float], sens_present: bool) -> Dict[str, Any]:
+    """Federated learning client."""
+    
+    def __init__(
+        self,
+        client_id: int,
+        model: nn.Module,
+        train_dataset: Dataset,
+        val_dataset: Optional[Dataset] = None,
+        batch_size: int = 32,
+        device: str = "cpu"
+    ):
+        self.client_id = client_id
+        self.model = model
+        self.train_dataset = train_dataset
+        self.val_dataset = val_dataset
+        self.batch_size = batch_size
+        self.device = torch.device(device)
+        
+        # Create data loaders
+        self.train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True
+        )
+        
+        if val_dataset:
+            self.val_loader = DataLoader(
+                val_dataset,
+                batch_size=batch_size,
+                shuffle=False
+            )
+        else:
+            self.val_loader = None
+    
+    def train(
+        self,
+        global_weights: Dict[str, torch.Tensor],
+        epochs: int,
+        lr: float,
+        weight_decay: float = 0.0,
+        proximal_mu: float = 0.0,
+        server_val_data: Optional[Tuple] = None
+    ) -> Tuple[Dict[str, torch.Tensor], int, Dict[str, Any]]:
+        """
+        Train local model.
+        
+        Returns:
+            - Model delta (update)
+            - Number of samples
+            - Training statistics including fairness metrics
+        """
+        # Load global weights
+        self.model.load_state_dict(global_weights)
+        self.model.to(self.device)
         self.model.train()
-        opt = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
-        adv_opt = torch.optim.Adam(self.adversary.parameters(), lr=lr) if self.adversary is not None else None
-
-        lambda_eo = fairness_weights.get("lambda_eo", 0.0)
-        lambda_sp = fairness_weights.get("lambda_sp", 0.0)
-
-        total = 0
-        fairness_counts = {}
-        for _ in range(epochs):
-            for batch in loader:
-                x, y, a = to_device(batch["x"], self.device), to_device(batch["y"], self.device), \
-                          to_device(batch.get(self.sensitive_key, None), self.device)
-
-                logits = self.model(x).squeeze(-1)
-                base_loss_vec = self.criterion(logits, y.float())
-                # inverse-frequency reweighting by group to raise minority gradient
-                if sens_present and a is not None:
-                    # simple 2-group case (0/1). Extendable.
-                    mask0 = (a == 0)
-                    mask1 = (a == 1)
-                    n0 = mask0.sum().clamp_min(1)
-                    n1 = mask1.sum().clamp_min(1)
-                    w0 = (n0 + n1).float() / (2.0 * n0.float())
-                    w1 = (n0 + n1).float() / (2.0 * n1.float())
-                    weights = torch.where(mask0, w0, w1)
+        
+        # Store initial weights for proximal term
+        if proximal_mu > 0:
+            global_model = copy.deepcopy(self.model)
+            global_model.eval()
+        
+        # Setup optimizer
+        optimizer = create_optimizer(
+            self.model,
+            lr=lr,
+            weight_decay=weight_decay
+        )
+        
+        # Training loop
+        criterion = nn.BCEWithLogitsLoss()
+        total_loss = 0.0
+        n_samples = 0
+        
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            
+            for batch_idx, batch in enumerate(self.train_loader):
+                # Handle both with and without sensitive attributes
+                if len(batch) == 3:
+                    X, y, a = batch
+                    a = a.to(self.device) if a is not None else None
                 else:
-                    weights = torch.ones_like(base_loss_vec)
-
-                base_loss = (weights * base_loss_vec).mean()
-
-                # optional adversary to remove sensitive leakage (if present)
-                adv_loss = 0.0
-                if self.adversary is not None and sens_present and a is not None:
-                    with torch.no_grad():
-                        h = torch.sigmoid(logits).detach()
-                    p_a = self.adversary(h.unsqueeze(-1))
-                    adv_crit = nn.BCEWithLogitsLoss()
-                    adv_loss = adv_crit(p_a.squeeze(-1), a.float())
-
-                # fairness surrogates: encourage equal TPR (EO) and parity (SP) by penalizing
-                # group loss differences (simple, stable proxy)
-                if sens_present and a is not None:
-                    loss0 = base_loss_vec[a == 0].mean() if (a == 0).any() else 0.0
-                    loss1 = base_loss_vec[a == 1].mean() if (a == 1).any() else 0.0
-                    eo_proxy = (loss0 - loss1).abs()
-                    sp_proxy = (torch.sigmoid(logits)[a == 0].mean() - torch.sigmoid(logits)[a == 1].mean()).abs()
+                    X, y = batch
+                    a = None
+                
+                X = X.to(self.device)
+                y = y.to(self.device).float()
+                
+                # Forward pass
+                optimizer.zero_grad()
+                outputs = self.model(X).squeeze()
+                loss = criterion(outputs, y)
+                
+                # Add proximal term if using FedProx
+                if proximal_mu > 0:
+                    proximal_term = 0.0
+                    for w, w_global in zip(
+                        self.model.parameters(),
+                        global_model.parameters()
+                    ):
+                        proximal_term += torch.norm(w - w_global) ** 2
+                    loss += (proximal_mu / 2) * proximal_term
+                
+                # Backward pass
+                loss.backward()
+                optimizer.step()
+                
+                epoch_loss += loss.item() * X.size(0)
+                n_samples += X.size(0)
+            
+            total_loss += epoch_loss
+        
+        # Compute average loss
+        avg_loss = total_loss / (n_samples * epochs) if n_samples > 0 else 0.0
+        
+        # Compute model delta
+        delta = compute_model_delta(
+            self.model.state_dict(),
+            global_weights
+        )
+        
+        # Compute fairness metrics on server validation if provided
+        stats = {"train_loss": avg_loss}
+        
+        if server_val_data is not None:
+            X_val, y_val, a_val = server_val_data
+            X_val = X_val.to(self.device)
+            
+            self.model.eval()
+            with torch.no_grad():
+                outputs = self.model(X_val).squeeze()
+                y_pred = (torch.sigmoid(outputs) > 0.5).int()
+            
+            # Compute fairness metrics
+            fair_report = fairness_report(
+                y_pred.cpu(),
+                y_val,
+                a_val if a_val is not None else None
+            )
+            
+            stats.update({
+                "val_loss": criterion(outputs, y_val.to(self.device).float()).item(),
+                "eo_gap": fair_report["EO_gap"],
+                "fpr_gap": fair_report["FPR_gap"],
+                "sp_gap": fair_report["SP_gap"],
+                "val_acc": fair_report["accuracy"]
+            })
+        
+        return delta, len(self.train_dataset), stats
+    
+    def evaluate(
+        self,
+        weights: Dict[str, torch.Tensor],
+        test_loader: Optional[DataLoader] = None
+    ) -> Dict[str, float]:
+        """Evaluate model on test data."""
+        self.model.load_state_dict(weights)
+        self.model.to(self.device)
+        self.model.eval()
+        
+        if test_loader is None:
+            test_loader = self.val_loader
+            if test_loader is None:
+                return {}
+        
+        criterion = nn.BCEWithLogitsLoss()
+        total_loss = 0.0
+        all_preds = []
+        all_labels = []
+        all_sensitive = []
+        n_samples = 0
+        
+        with torch.no_grad():
+            for batch in test_loader:
+                if len(batch) == 3:
+                    X, y, a = batch
+                    all_sensitive.append(a)
                 else:
-                    eo_proxy = torch.tensor(0.0, device=self.device)
-                    sp_proxy = torch.tensor(0.0, device=self.device)
-
-                total_loss = base_loss + lambda_eo * eo_proxy + lambda_sp * sp_proxy
-                if self.adversary is not None:
-                    total_loss = total_loss - 0.1 * adv_loss  # confuse adversary
-
-                opt.zero_grad()
-                if self.adversary is not None:
-                    adv_opt.zero_grad()
-                total_loss.backward()
-                opt.step()
-                if self.adversary is not None:
-                    # adversary maximizes ability to predict a from h
-                    with torch.no_grad():
-                        h = torch.sigmoid(self.model(x).squeeze(-1)).detach()
-                    p_a = self.adversary(h.unsqueeze(-1))
-                    adv_crit = nn.BCEWithLogitsLoss()
-                    adv_loss = adv_crit(p_a.squeeze(-1), a.float())
-                    adv_loss.backward()
-                    adv_opt.step()
-
-                # bookkeeping
-                total += x.size(0)
-                # streaming fairness counts for post-processing
-                batch_counts = compute_group_counts_from_batch(logits.detach(), y, a)
-                # merge
-                for k, v in batch_counts.items():
-                    fairness_counts[k] = fairness_counts.get(k, 0) + v
-
-        return {
-            "state_dict": self.model.state_dict(),
-            "num_samples": total,
-            "fairness_counts": fairness_counts
+                    X, y = batch
+                    a = None
+                
+                X = X.to(self.device)
+                y = y.to(self.device).float()
+                
+                outputs = self.model(X).squeeze()
+                loss = criterion(outputs, y)
+                
+                total_loss += loss.item() * X.size(0)
+                n_samples += X.size(0)
+                
+                preds = (torch.sigmoid(outputs) > 0.5).int()
+                all_preds.append(preds.cpu())
+                all_labels.append(y.cpu().int())
+        
+        # Aggregate predictions
+        all_preds = torch.cat(all_preds)
+        all_labels = torch.cat(all_labels)
+        
+        if all_sensitive:
+            all_sensitive = torch.cat(all_sensitive)
+        else:
+            all_sensitive = None
+        
+        # Compute metrics
+        avg_loss = total_loss / n_samples if n_samples > 0 else 0.0
+        accuracy = (all_preds == all_labels).float().mean().item()
+        
+        metrics = {
+            "loss": avg_loss,
+            "accuracy": accuracy,
+            "n_samples": n_samples
         }
+        
+        # Add fairness metrics if sensitive attributes available
+        if all_sensitive is not None:
+            fair_report = fairness_report(all_preds, all_labels, all_sensitive)
+            metrics.update(fair_report)
+        
+        return metrics
