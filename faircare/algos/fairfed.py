@@ -1,24 +1,42 @@
-from __future__ import annotations
-from typing import List, Dict, Any
-import numpy as np
-from .aggregator import BaseAggregator
+"""FairFed implementation (simplified fairness weighting)."""
 
+import torch
+from typing import List, Dict
+from faircare.algos.aggregator import BaseAggregator, register_aggregator
+
+
+@register_aggregator("fairfed")
 class FairFedAggregator(BaseAggregator):
     """
-    Heuristic: increase weights for clients that appear to represent underperforming groups
-    by relying on server-provided local 'factor' (lower factor -> underperforming).
+    Simple fairness-weighted federated learning.
+    
+    Weights clients inversely proportional to their fairness gaps.
     """
-    def __init__(self, sens_present: bool, gamma: float = 0.3):
-        super().__init__(sens_present)
-        self.gamma = gamma
-
-    def compute_weights(self, local_meta: List[Dict[str, Any]]) -> List[float]:
-        n = len(local_meta)
-        f = np.array([m["factor"] for m in local_meta])
-        # higher weight to smaller factors
-        w = (1.0 + self.gamma * (f.max() - f))  # linear boost
-        w = w / w.sum()
-        return w.tolist()
-
-def make_aggregator(sens_present: bool) -> BaseAggregator:
-    return FairFedAggregator(sens_present)
+    
+    def __init__(
+        self,
+        n_clients: int,
+        fairness_metric: str = "max_group_gap",
+        **kwargs
+    ):
+        super().__init__(n_clients)
+        self.fairness_metric = fairness_metric
+    
+    def compute_weights(self, client_summaries: List[Dict]) -> torch.Tensor:
+        """
+        Compute weights inversely proportional to fairness gaps.
+        """
+        gaps = []
+        
+        for summary in client_summaries:
+            gap = summary.get(self.fairness_metric, 0.0)
+            # Add small epsilon to avoid division by zero
+            gaps.append(gap + 1e-6)
+        
+        gaps = torch.tensor(gaps, dtype=torch.float32)
+        
+        # Inverse weighting
+        weights = 1.0 / gaps
+        weights = weights / weights.sum()
+        
+        return weights
