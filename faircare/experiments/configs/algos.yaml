@@ -1,16 +1,55 @@
-# faircare/experiments/configs/algos.yaml
-faircare_f1:
-  name: faircare_f1
-  local_epochs: 1
-  lr: 0.01
-  weight_decay: 0.0
-  beta_momentum: 0.7
-  target_eo: 0.03
-  target_sp: 0.03
-  dual_step: 0.05
-  max_dual: 10.0
-  client_reweight_gamma: 0.2
-  client_resample_frac: 1.0
-  postprocess_equalized_odds: true
-  max_weight_scale: 2.0
-  min_weight_scale: 0.25
+# Algorithm-specific configurations
+
+fedavg:
+  training:
+    algo: "fedavg"
+  algo:
+    weighted: true
+
+fedprox:
+  training:
+    algo: "fedprox"
+  algo:
+    fedprox_mu: 0.01
+
+qffl:
+  training:
+    algo: "qffl"
+  algo:
+    q: 2.0
+    q_eps: 0.0001
+
+afl:
+  training:
+    algo: "afl"
+  algo:
+    afl_lambda: 0.1
+    afl_smoothing: 0.01
+
+fairfate:
+  training:
+    algo: "fairfate"
+  fairness:
+    alpha: 1.0
+    beta: 0.5
+    gamma: 0.5
+    delta: 0.1
+    tau: 1.0
+    epsilon: 0.01
+
+faircare_fl:
+  training:
+    algo: "faircare_fl"
+  fairness:
+    alpha: 1.0
+    beta: 0.5
+    gamma: 0.5
+    delta: 0.1
+    tau: 1.0
+    mu: 0.9
+    epsilon: 0.01
+    tau_anneal: true
+    weight_clip: 10.0
+  algo:
+    faircare_momentum: 0.9
+    faircare_anneal_rounds: 5
