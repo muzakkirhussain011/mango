@@ -1,21 +1,90 @@
-from __future__ import annotations
-import os
-import numpy as np
-import pandas as pd
+"""MIMIC and eICU dataset stubs with synthetic fallback."""
 
-def load_mimic_eicu(cache_dir: str, sensitive: str):
+import torch
+import numpy as np
+from torch.utils.data import Dataset
+from typing import Dict, Optional
+import warnings
+from faircare.data.synth_health import generate_synthetic_health
+
+
+class MIMICDataset(Dataset):
+    """MIMIC dataset stub."""
+    
+    def __init__(self, X, y, a):
+        self.X = torch.FloatTensor(X)
+        self.y = torch.LongTensor(y)
+        self.a = torch.LongTensor(a) if a is not None else None
+    
+    def __len__(self):
+        return len(self.X)
+    
+    def __getitem__(self, idx):
+        if self.a is not None:
+            return self.X[idx], self.y[idx], self.a[idx]
+        return self.X[idx], self.y[idx]
+
+
+def load_mimic(
+    data_path: Optional[str] = None,
+    sensitive_attribute: Optional[str] = "gender",
+    **kwargs
+) -> Dict:
     """
-    Expect a local CSV 'data/mimic_eicu.csv' with columns:
-      features... , label, sensitive
-    This avoids licensing issues. Provide your own extract.
+    Load MIMIC-III/IV dataset.
+    Falls back to synthetic data if not available.
     """
-    path = os.path.join(cache_dir, "mimic_eicu.csv")
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Expected {path}. Provide a local CSV.")
-    df = pd.read_csv(path)
-    if "label" not in df.columns or "sensitive" not in df.columns:
-        raise ValueError("CSV must include 'label' and 'sensitive' columns")
-    y = df["label"].astype(int).to_numpy()
-    a = df["sensitive"].astype(int).to_numpy()
-    X = df.drop(columns=["label","sensitive"]).to_numpy().astype(np.float32)
-    return X, y, a
+    if data_path is None:
+        warnings.warn(
+            "MIMIC data path not provided. Using synthetic data as fallback. "
+            "To use real MIMIC data, provide data_path parameter."
+        )
+        
+        # Generate synthetic data mimicking MIMIC characteristics
+        return generate_synthetic_health(
+            n_samples=20000,
+            n_features=50,  # More features for ICU data
+            bias_level=0.25,  # Moderate bias
+            group_imbalance=0.45,  # Slight gender imbalance
+            noise_level=0.15,
+            **kwargs
+        )
+    
+    # Placeholder for actual MIMIC loading
+    # This would require proper credentialed access and preprocessing
+    raise NotImplementedError(
+        "Real MIMIC data loading requires credentialed access. "
+        "Please use synthetic data for testing."
+    )
+
+
+def load_eicu(
+    data_path: Optional[str] = None,
+    sensitive_attribute: Optional[str] = "gender",
+    **kwargs
+) -> Dict:
+    """
+    Load eICU dataset.
+    Falls back to synthetic data if not available.
+    """
+    if data_path is None:
+        warnings.warn(
+            "eICU data path not provided. Using synthetic data as fallback. "
+            "To use real eICU data, provide data_path parameter."
+        )
+        
+        # Generate synthetic data mimicking eICU characteristics
+        return generate_synthetic_health(
+            n_samples=15000,
+            n_features=45,
+            bias_level=0.2,
+            group_imbalance=0.48,
+            noise_level=0.12,
+            **kwargs
+        )
+    
+    # Placeholder for actual eICU loading
+    raise NotImplementedError(
+        "Real eICU data loading requires credentialed access. "
+        "Please use synthetic data for testing."
+    )

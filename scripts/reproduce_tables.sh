@@ -1,31 +1,48 @@
-#!/usr/bin/env bash
+#!/bin/bash
+# Reproduce paper tables
+
 set -e
 
-# Example: run multiple seeds and write compact JSON to paper/tables/
-# Assumes configs exist for each algorithm in experiments/configs/algos.yaml
-ALGS=("fedavg" "qffl" "fairfed" "fairfate" "fedgft" "faircare_f1")
-DATASET="adult"
-OUTDIR="paper/tables"
-mkdir -p $OUTDIR
+echo "Reproducing paper tables..."
+echo "=========================="
 
-for ALG in "${ALGS[@]}"; do
-  JSONOUT="${OUTDIR}/${ALG}_${DATASET}.json"
-  echo "[]" > $JSONOUT
-  for SEED in 1 2 3 4 5; do
-    python -m faircare.experiments.run_experiments --algo $ALG --dataset $DATASET | \
-      python - <<'PY'
-import sys,json,re
-lines=sys.stdin.read().strip().splitlines()
-last=[l for l in lines if l.startswith("[Round")]
-if not last: sys.exit(0)
-m=eval(last[-1].split("]")[1].strip())
-print(json.dumps(m))
-PY
-    # append to JSON array
-    LAST=$(tail -n 1 nohup.out 2>/dev/null || true)
-    # For simplicity, we read from stdout captured above:
-    # In Colab use cell magic to capture; locally you might redirect.
-  done
-done
+# Run main experiments
+echo "Running experiments..."
+python -m faircare.experiments.run_sweep \
+    --config faircare/experiments/configs/search.yaml \
+    --n_workers 4 \
+    --output_dir results/tables
 
-python -m paper.tables
+# Generate LaTeX tables
+echo "Generating LaTeX tables..."
+python -m paper.tables \
+    --results_dir results/tables \
+    --output_dir paper/tables
+
+# Generate comparison tables
+echo "Generating comparison tables..."
+python -c "
+import json
+import pandas as pd
+from pathlib import Path
+from faircare.fairness.summarize import create_summary_table, export_latex_table
+
+results_path = Path('results/tables/aggregated_results.json')
+with open(results_path) as f:
+    results = json.load(f)
+
+# Main results table
+df = create_summary_table(results)
+export_latex_table(
+    df,
+    'paper/tables/main_results.tex',
+    caption='Comparison of federated learning algorithms on fairness metrics',
+    label='tab:main_results'
+)
+
+print('Tables generated successfully!')
+"
+
+echo ""
+echo "Tables saved to: paper/tables/"
+echo "=========================="

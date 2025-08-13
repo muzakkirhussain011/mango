@@ -1,7 +1,56 @@
-datasets:
-  - name: adult
-    sensitive_feature: sex
-  - name: heart
-    sensitive_feature: sex
-  - name: synth_health
-    sensitive_feature: group
+# Dataset-specific configurations
+
+adult:
+  model:
+    input_dim: 108  # After encoding
+    hidden_dims: [64, 32]
+  data:
+    dataset: "adult"
+    sensitive_attribute: "sex"
+    n_clients: 10
+    batch_size: 32
+
+heart:
+  model:
+    input_dim: 13
+    hidden_dims: [32, 16]
+  data:
+    dataset: "heart"
+    sensitive_attribute: "sex"
+    n_clients: 10
+    batch_size: 16
+
+synth_health:
+  model:
+    input_dim: 20
+    hidden_dims: [64, 32]
+  data:
+    dataset: "synth_health"
+    sensitive_attribute: "synthetic_group"
+    n_clients: 10
+    batch_size: 32
+    # Synthetic data parameters
+    n_samples: 10000
+    bias_level: 0.3
+    group_imbalance: 0.5
+    noise_level: 0.1
+
+mimic:
+  model:
+    input_dim: 50
+    hidden_dims: [128, 64, 32]
+  data:
+    dataset: "mimic"
+    sensitive_attribute: "gender"
+    n_clients: 20
+    batch_size: 64
+
+eicu:
+  model:
+    input_dim: 45
+    hidden_dims: [128, 64, 32]
+  data:
+    dataset: "eicu"
+    sensitive_attribute: "gender"
+    n_clients: 15
+    batch_size: 64
