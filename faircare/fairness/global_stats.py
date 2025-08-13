@@ -1,52 +1,130 @@
-# faircare/fairness/global_stats.py
-from typing import Dict, List
+"""Global fairness statistics and tracking."""
 
-def _safe_div(a, b):
-    return float(a) / float(max(1, b))
+import numpy as np
+from typing import Dict, List, Optional, Tuple
+from collections import defaultdict
+import torch
 
-def compute_global_fairness_from_counts(counts: Dict[str, int]) -> Dict[str, float]:
-    """
-    counts keys:
-      TP_g0, FP_g0, FN_g0, TN_g0
-      TP_g1, FP_g1, FN_g1, TN_g1
-    """
-    out = {}
-    for g in [0, 1]:
-        TP = counts.get(f"TP_g{g}", 0)
-        FP = counts.get(f"FP_g{g}", 0)
-        FN = counts.get(f"FN_g{g}", 0)
-        TN = counts.get(f"TN_g{g}", 0)
-        TPR = _safe_div(TP, TP + FN)
-        FPR = _safe_div(FP, FP + TN)
-        PR  = _safe_div(TP, max(1, TP + FP))
-        Pos = _safe_div(TP + FP, TP + FP + TN + FN)
-        out[f"g{g}_TPR"] = TPR
-        out[f"g{g}_FPR"] = FPR
-        out[f"g{g}_PR"]  = PR
-        out[f"g{g}_PosRate"] = Pos
-    out["EO_gap"] = abs(out["g0_TPR"] - out["g1_TPR"])
-    out["FPR_gap"] = abs(out["g0_FPR"] - out["g1_FPR"])
-    out["SP_gap"] = abs(out["g0_PosRate"] - out["g1_PosRate"])
-    return out
 
-def worst_group_focus_per_client(per_client_counts: List[Dict[str, int]], global_stats: Dict[str, float]) -> List[float]:
-    """
-    Returns a nonnegative focus weight per client emphasizing the disadvantaged group.
-    Use TPR gap as primary signal.
-    """
-    g_worst = 0 if global_stats.get("g0_TPR", 0.0) < global_stats.get("g1_TPR", 0.0) else 1
-    focus = []
-    for c in per_client_counts:
-        TP = c.get(f"TP_g{g_worst}", 0)
-        FP = c.get(f"FP_g{g_worst}", 0)
-        FN = c.get(f"FN_g{g_worst}", 0)
-        TN = c.get(f"TN_g{g_worst}", 0)
-        n = TP + FP + FN + TN
-        focus.append(_safe_div(TP + FN + FP + TN, n) if n > 0 else 0.0)  # basically 1 if any coverage
-        # A more nuanced score can be: proportion of worst-group samples in that client.
-        # For stability, keep it binary-ish: 1 if present, 0 otherwise.
-        focus[-1] = 1.0 if n > 0 else 0.0
-    # normalize to [0,1]
-    s = sum(focus) + 1e-12
-    focus = [f / s for f in focus] if s > 0 else [0.0 for _ in focus]
-    return focus
+class FairnessTracker:
+    """Track fairness metrics across rounds."""
+    
+    def __init__(self):
+        self.history = defaultdict(list)
+        self.round_data = []
+    
+    def update(self, metrics: Dict, round_idx: int):
+        """Update with new round metrics."""
+        self.round_data.append({
+            "round": round_idx,
+            **metrics
+        })
+        
+        for key, value in metrics.items():
+            self.history[key].append(value)
+    
+    def get_worst_group_stats(self) -> Dict:
+        """Get worst-group statistics."""
+        if not self.round_data:
+            return {}
+        
+        latest = self.round_data[-1]
+        
+        worst_stats = {}
+        for metric in ["accuracy", "f1", "tpr"]:
+            g0_key = f"g0_{metric}"
+            g1_key = f"g1_{metric}"
+            
+            if g0_key in latest and g1_key in latest:
+                worst_stats[f"worst_{metric}"] = min(
+                    latest[g0_key],
+                    latest[g1_key]
+                )
+        
+        return worst_stats
+    
+    def get_summary(self) -> Dict:
+        """Get summary statistics."""
+        summary = {}
+        
+        for key, values in self.history.items():
+            if values and isinstance(values[0], (int, float)):
+                summary[key] = {
+                    "mean": np.mean(values),
+                    "std": np.std(values),
+                    "min": np.min(values),
+                    "max": np.max(values),
+                    "final": values[-1]
+                }
+        
+        return summary
+    
+    def bootstrap_ci(
+        self,
+        metric: str,
+        confidence: float = 0.95,
+        n_bootstrap: int = 1000
+    ) -> Tuple[float, float]:
+        """Compute bootstrap confidence interval for a metric."""
+        if metric not in self.history:
+            return (0.0, 0.0)
+        
+        values = self.history[metric]
+        n = len(values)
+        
+        if n == 0:
+            return (0.0, 0.0)
+        
+        bootstrap_means = []
+        for _ in range(n_bootstrap):
+            sample = np.random.choice(values, size=n, replace=True)
+            bootstrap_means.append(np.mean(sample))
+        
+        alpha = 1 - confidence
+        lower = np.percentile(bootstrap_means, 100 * alpha / 2)
+        upper = np.percentile(bootstrap_means, 100 * (1 - alpha / 2))
+        
+        return lower, upper
+
+
+class StreamingStats:
+    """Streaming statistics computation."""
+    
+    def __init__(self):
+        self.n = 0
+        self.mean = 0.0
+        self.M2 = 0.0
+        self.min_val = float('inf')
+        self.max_val = float('-inf')
+    
+    def update(self, value: float):
+        """Update with new value using Welford's algorithm."""
+        self.n += 1
+        delta = value - self.mean
+        self.mean += delta / self.n
+        delta2 = value - self.mean
+        self.M2 += delta * delta2
+        
+        self.min_val = min(self.min_val, value)
+        self.max_val = max(self.max_val, value)
+    
+    def get_stats(self) -> Dict:
+        """Get current statistics."""
+        if self.n == 0:
+            return {
+                "n": 0,
+                "mean": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0
+            }
+        
+        variance = self.M2 / self.n if self.n > 1 else 0.0
+        
+        return {
+            "n": self.n,
+            "mean": self.mean,
+            "std": np.sqrt(variance),
+            "min": self.min_val,
+            "max": self.max_val
+        }
