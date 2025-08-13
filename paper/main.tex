@@ -1,5 +1,46 @@
 \documentclass{article}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+\title{FairCare-FL: Fair Federated Learning for Healthcare Bias Mitigation}
+\author{Anonymous}
+
 \begin{document}
-\section{FairCare-FL: Unified Fairness in Federated Learning}
-See codebase for implementation details.
+
+\maketitle
+
+\begin{abstract}
+We present FairCare-FL, a novel federated learning framework designed to address bias in healthcare applications. Our approach combines server-side fairness-aware aggregation with momentum to achieve superior performance on both accuracy and fairness metrics.
+\end{abstract}
+
+\section{Introduction}
+Healthcare AI systems must ensure equitable treatment across all demographic groups...
+
+\section{Method}
+Our FairCare-FL algorithm extends existing fairness-aware federated learning approaches...
+
+\section{Experiments}
+We evaluate on Adult, Heart Disease, and synthetic healthcare datasets...
+
+\subsection{Results}
+\input{tables/main_results.tex}
+\input{tables/statistical.tex}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/convergence.pdf}
+\caption{Convergence of different algorithms}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/fairness_comparison.pdf}
+\caption{Fairness metrics comparison}
+\end{figure}
+
+\section{Conclusion}
+FairCare-FL significantly outperforms baselines on fairness metrics while maintaining competitive accuracy...
+
 \end{document}
