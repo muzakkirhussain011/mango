@@ -1,3 +1,0 @@
-- [x] Code released
-- [x] Reproducibility
-- [x] Ethical considerations
