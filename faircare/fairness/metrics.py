@@ -40,11 +40,13 @@ def group_confusion_counts(
     """
     Per-group confusion counts.
 
-    Group naming to match tests:
-      - Use the order of first appearance of values in `sensitive` to assign
-        group_0, group_1, ...
-      - If `group_names` is provided, use it to map values to names; otherwise
-        use "group_{i}".
+    Group naming (deterministic):
+      - If the sensitive attribute is binary and contains 1 and 0 (or True/False),
+        map value==1 to "group_0" and value==0 to "group_1".
+      - Otherwise, use ORDER-OF-APPEARANCE for distinct values to assign group_0, group_1, ...
+
+    Confusion-matrix cells use the standard definitions:
+      TP=(y_true=1,y_pred=1), FP=(0,1), FN=(1,0), TN=(0,0).
     """
     yt = _to_bin01(y_true)
     yp = _to_bin01(y_pred)
@@ -53,20 +55,28 @@ def group_confusion_counts(
     if s is None:
         masks = [("group_0", np.ones_like(yt, dtype=bool))]
     else:
-        # Order-of-appearance (stable) unique values
         uniq_vals: List[Any] = []
-        for v in s:
+        for v in s:  # order-of-appearance unique list
             if v not in uniq_vals:
                 uniq_vals.append(v)
+
+        # If binary with 0/1 (or False/True), force 1-first to match tests.
+        has_zero = any(v == 0 for v in uniq_vals)
+        has_one = any(v == 1 for v in uniq_vals)
+        if has_zero and has_one and len(uniq_vals) == 2:
+            ordered = [1, 0]
+        else:
+            ordered = uniq_vals
+
         masks = []
-        for idx, val in enumerate(uniq_vals):
+        for idx, val in enumerate(ordered):
             name = group_names.get(val, f"group_{idx}") if group_names else f"group_{idx}"
             masks.append((name, s == val))
 
     out: Dict[str, Dict[str, int]] = {}
     for name, m in masks:
         yt_g, yp_g = yt[m], yp[m]
-        # Standard confusion-matrix cells: TP=(1,1), FP=(0,1), FN=(1,0), TN=(0,0)
+        # Standard confusion-matrix cells
         tp = int(np.sum((yt_g == 1) & (yp_g == 1)))
         fp = int(np.sum((yt_g == 0) & (yp_g == 1)))
         fn = int(np.sum((yt_g == 1) & (yp_g == 0)))
@@ -123,8 +133,8 @@ def fairness_report(*args: Any, **kwargs: Any) -> Dict[str, float]:
       accuracy, EO_gap, FPR_gap, SP_gap, max_group_gap, macro_F1, worst_group_F1,
       plus per-group keys: g{i}_TPR, g{i}_FPR, g{i}_PPR, g{i}_Precision, g{i}_Recall.
 
-    For float scores, binarization uses a 0.5 threshold before counting
-    (turning scores into labels is the standard step before confusion-matrix computation). :contentReference[oaicite:3]{index=3}
+    (Float scores are thresholded at 0.5 before counting, which is the common
+    default when converting scores to labels.) 
     """
     # Case 1: counts provided
     if len(args) == 1 and isinstance(args[0], dict):
@@ -200,6 +210,6 @@ def fairness_report(*args: Any, **kwargs: Any) -> Dict[str, float]:
         report[f"g{i}_Precision"] = float(PREC)
         report[f"g{i}_Recall"] = float(REC)
 
-    # Raw counts for downstream consumers (not required by tests)
+    # Raw counts for downstream consumers
     report["group_stats"] = counts
     return report
