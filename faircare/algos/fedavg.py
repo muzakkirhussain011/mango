@@ -1,8 +1,8 @@
-"""FedAvg implementation."""
-from typing import Dict, List
+"""FedAvg implementation used by tests."""
+from typing import Dict, List, Any
 
 import torch
-from typing import List
+
 from faircare.algos.aggregator import BaseAggregator, register_aggregator
 
 
@@ -10,39 +10,14 @@ from faircare.algos.aggregator import BaseAggregator, register_aggregator
 class FedAvgAggregator(BaseAggregator):
     """
     Federated Averaging (FedAvg).
-    
-    Reference: McMahan et al., "Communication-Efficient Learning of
-    Deep Networks from Decentralized Data" (2017)
+    Computes either uniform weights or dataset-size weighted averaging.
     """
-    
-    def __init__(
-        self,
-        n_clients: int,
-        weighted: bool = True,
-        **kwargs
-    ):
-        super().__init__(n_clients)
-        self.weighted = weighted
-    
-    def compute_weights(self, client_summaries: List[Dict]) -> torch.Tensor:
-        """
-        Compute weights based on number of samples.
-        
-        Args:
-            client_summaries: List of client statistics
-        
-        Returns:
-            Aggregation weights
-        """
+    def compute_weights(self, client_summaries: List[Dict[str, Any]]) -> torch.Tensor:
         if self.weighted:
-            # Weight by number of samples
-            n_samples = torch.tensor([
-                s.get("n_samples", 1) for s in client_summaries
-            ], dtype=torch.float32)
-            weights = n_samples / n_samples.sum()
+            n_samples = torch.tensor([s.get("n_samples", 1) for s in client_summaries], dtype=torch.float32)
+            weights = n_samples / n_samples.sum() if n_samples.sum() > 0 else torch.ones(len(client_summaries)) / len(client_summaries)
         else:
-            # Uniform weights
             n = len(client_summaries)
-            weights = torch.ones(n) / n
-        
-        return weights
+            weights = torch.ones(n, dtype=torch.float32) / max(n, 1)
+
+        return self._postprocess(weights)
