@@ -7,7 +7,8 @@ from faircare.algos.aggregator import BaseAggregator, register_aggregator
 
 
 def _extract_num_samples(s: Dict[str, Any]) -> float:
-    for k in ("n_samples", "num_samples", "samples", "dataset_size", "size", "n"):
+    # Be permissive: accept several common keys used in tests/dataloaders.
+    for k in ("n_samples", "num_samples", "num_examples", "samples", "dataset_size", "size", "n"):
         if k in s and s[k] is not None:
             try:
                 return float(s[k])
@@ -22,6 +23,7 @@ class FedAvgAggregator(BaseAggregator):
     Federated Averaging (FedAvg).
     - If `weighted=True`, weight ∝ client sample count.
     - Else uniform.
+    Floors/clipping are applied by BaseAggregator._postprocess().
     """
     def compute_weights(self, client_summaries: List[Dict[str, Any]]) -> torch.Tensor:
         n = len(client_summaries)
