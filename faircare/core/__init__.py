@@ -1,34 +1,38 @@
+# faircare/core/__init__.py
+"""
+Core package initialisation.
 
-"""Core federated learning components."""
+We install a small shim so dataclass configs (e.g., SecureAggConfig) expose a
+`.to_dict()` method. This avoids AttributeError in trainer code that expects it.
+"""
+from __future__ import annotations
 
-from faircare.core.client import Client
-from faircare.core.server import Server
-from faircare.core.secure_agg import SecureAggregator
-from faircare.core.trainer import run_experiment
-from faircare.core.evaluation import Evaluator
-from faircare.core.utils import (
-    set_seed,
-    seed_context,
-    Logger,
-    sample_clients,
-    average_weights,
-    weighted_average_weights,
-    compute_model_delta,
-    apply_model_delta
-)
+from dataclasses import is_dataclass, asdict
 
-__all__ = [
-    "Client",
-    "Server",
-    "SecureAggregator",
-    "run_experiment",
-    "Evaluator",
-    "set_seed",
-    "seed_context",
-    "Logger",
-    "sample_clients",
-    "average_weights",
-    "weighted_average_weights",
-    "compute_model_delta",
-    "apply_model_delta"
-]
+# Best-effort patching only if these classes exist.
+try:
+    from . import config as _cfg  # type: ignore
+except Exception:
+    _cfg = None  # type: ignore
+
+
+def _as_dict(self):
+    if is_dataclass(self):
+        return asdict(self)
+    d = getattr(self, "__dict__", None)
+    return dict(d) if isinstance(d, dict) else {}
+
+
+def _patch_to_dict(cls_name: str):
+    if _cfg is None:
+        return
+    cls = getattr(_cfg, cls_name, None)
+    if cls is not None and not hasattr(cls, "to_dict"):
+        try:
+            setattr(cls, "to_dict", _as_dict)
+        except Exception:
+            pass
+
+
+for _name in ("SecureAggConfig", "FairnessConfig", "AlgoConfig", "TrainingConfig"):
+    _patch_to_dict(_name)
