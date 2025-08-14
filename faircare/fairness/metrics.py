@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 
+# ── Helpers ──────────────────────────────────────────────────────────────────
 def _to_np(x):
     if x is None:
         return None
@@ -29,6 +30,7 @@ def _to_bin01(x: np.ndarray) -> np.ndarray:
     return arr.astype(int).ravel()
 
 
+# ── Core metrics ──────────────────────────────────────────────────────────────
 def group_confusion_counts(
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -43,6 +45,9 @@ def group_confusion_counts(
         that value is mapped to "group_0".
       - Remaining distinct values are ordered ascending and mapped to group_1, group_2, ...
       - If 0 is not present, groups are ordered ascending.
+
+    Counts obey the standard confusion-matrix definitions (TP, FP, FN, TN).  See:
+    - Wikipedia “Confusion matrix”. :contentReference[oaicite:2]{index=2}
     """
     yt = _to_bin01(y_true)
     yp = _to_bin01(y_pred)
@@ -52,7 +57,7 @@ def group_confusion_counts(
         masks = [("group_0", np.ones_like(yt, dtype=bool))]
     else:
         uniq_vals: List[Any] = list(np.unique(s))
-        # Put 0 first if present (works for 0, 0.0, False)
+        # Put 0 (or False) first if present
         if any((v == 0) for v in uniq_vals):
             uniq_vals = [v for v in uniq_vals if not (v == 0)]
             uniq_vals = [0] + uniq_vals
@@ -64,6 +69,7 @@ def group_confusion_counts(
     out: Dict[str, Dict[str, int]] = {}
     for name, m in masks:
         yt_g, yp_g = yt[m], yp[m]
+        # Standard cell definitions: TP=(1,1), FP=(0,1), FN=(1,0), TN=(0,0)  :contentReference[oaicite:3]{index=3}
         tp = int(np.sum((yt_g == 1) & (yp_g == 1)))
         fp = int(np.sum((yt_g == 0) & (yp_g == 1)))
         fn = int(np.sum((yt_g == 1) & (yp_g == 0)))
@@ -119,6 +125,9 @@ def fairness_report(*args: Any, **kwargs: Any) -> Dict[str, float]:
     Returns:
       accuracy, EO_gap, FPR_gap, SP_gap, max_group_gap, macro_F1, worst_group_F1,
       plus per-group keys: g{i}_TPR, g{i}_FPR, g{i}_PPR, g{i}_Precision, g{i}_Recall.
+
+    For float scores, binarization uses a 0.5 threshold (scikit-learn also
+    discusses thresholding as the step that turns scores into labels). :contentReference[oaicite:4]{index=4}
     """
     # Case 1: counts provided
     if len(args) == 1 and isinstance(args[0], dict):
@@ -194,6 +203,6 @@ def fairness_report(*args: Any, **kwargs: Any) -> Dict[str, float]:
         report[f"g{i}_Precision"] = float(PREC)
         report[f"g{i}_Recall"] = float(REC)
 
-    # Also return the raw counts (not required by tests but useful)
+    # Raw counts for downstream consumers (not required by tests)
     report["group_stats"] = counts
     return report
