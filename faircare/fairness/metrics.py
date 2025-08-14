@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 
-def _to_np(x) -> Optional[np.ndarray]:
+def _to_np(x):
     if x is None:
         return None
     if isinstance(x, np.ndarray):
@@ -23,30 +23,27 @@ def group_confusion_counts(
     group_names: Optional[Dict[Hashable, str]] = None,
 ) -> Dict[str, Dict[str, int]]:
     """
-    Compute per-group confusion counts.
-    Returns a mapping like:
-        {
-          "group_0": {"TP": ..., "FP": ..., "FN": ..., "TN": ..., "N": ...},
-          "group_1": {...}
-        }
+    Per-group confusion counts with stable, *order-of-appearance* group naming:
+      first sensitive value seen → "group_0", second → "group_1", etc.
     """
     yt = _to_np(y_true).astype(int).ravel()
     yp = _to_np(y_pred).astype(int).ravel()
     s = _to_np(sensitive).ravel() if sensitive is not None else None
 
     if s is None:
-        mask = np.ones_like(yt, dtype=bool)
-        groups = [("group_0", mask)]
+        masks = [("group_0", np.ones_like(yt, dtype=bool))]
     else:
-        # Stable order: sort unique *by value*, so sensitive==0 maps to "group_0"
-        uniq_vals = np.unique(s)  # sorted order (0,1,2,...) ensures deterministic naming
-        groups = []
+        uniq_vals = []
+        for v in s:
+            if v not in uniq_vals:
+                uniq_vals.append(v)
+        masks = []
         for idx, val in enumerate(uniq_vals):
             name = group_names.get(val, f"group_{idx}") if group_names else f"group_{idx}"
-            groups.append((name, s == val))
+            masks.append((name, s == val))
 
     out: Dict[str, Dict[str, int]] = {}
-    for name, m in groups:
+    for name, m in masks:
         yt_g, yp_g = yt[m], yp[m]
         tp = int(np.sum((yt_g == 1) & (yp_g == 1)))
         fp = int(np.sum((yt_g == 0) & (yp_g == 1)))
@@ -56,32 +53,33 @@ def group_confusion_counts(
     return out
 
 
-def _rates_from_counts(c: Dict[str, int]) -> Tuple[float, float, float]:
-    """Return (TPR, FPR, PPR) from a group's confusion counts dict."""
+def _rates_from_counts(c: Dict[str, int]) -> Tuple[float, float, float, float, float]:
+    """
+    Return (TPR, FPR, PPR, Precision, Recall) from a group's confusion counts.
+    """
     tp, fp, fn, tn = c["TP"], c["FP"], c["FN"], c["TN"]
     pos = tp + fn
     neg = fp + tn
     n = pos + neg
     tpr = tp / pos if pos > 0 else 0.0
     fpr = fp / neg if neg > 0 else 0.0
-    ppr = (tp + fp) / n if n > 0 else 0.0  # predicted positive rate
-    return tpr, fpr, ppr
+    ppr = (tp + fp) / n if n > 0 else 0.0
+    prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    rec = tpr
+    return tpr, fpr, ppr, prec, rec
 
 
 def _macro_f1_from_counts(counts: Dict[str, Dict[str, int]]) -> float:
     """
-    Macro-F1 across groups; F1 per group computed from precision/recall for the positive class,
-    then averaged. (Matches scikit-learn's macro-F1 spirit.) :contentReference[oaicite:6]{index=6}
+    Macro-F1 across groups; F1 per group = 2 * (P * R) / (P + R) with 0 guards.
+    Mirrors scikit-learn's macro averaging notion. 
     """
     f1s = []
     for c in counts.values():
         tp, fp, fn = c["TP"], c["FP"], c["FN"]
         prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        if (prec + rec) == 0:
-            f1 = 0.0
-        else:
-            f1 = 2 * prec * rec / (prec + rec)
+        f1 = 0.0 if (prec + rec) == 0 else (2 * prec * rec / (prec + rec))
         f1s.append(f1)
     return float(np.mean(f1s)) if f1s else 0.0
 
@@ -89,20 +87,20 @@ def _macro_f1_from_counts(counts: Dict[str, Dict[str, int]]) -> float:
 def fairness_report(*args: Any, **kwargs: Any) -> Dict[str, float]:
     """
     Flexible fairness report:
-    - fairness_report(counts_dict) where counts_dict is either
-      {"group_0": {"TP":...}, "group_1": {...}}  OR a flat dict with g0_* keys.
-    - fairness_report(y_pred, y_true, sensitive) OR fairness_report(y_true, y_pred, sensitive)
-    - If `sensitive` is None → gaps are 0.0.
-    Returns: accuracy, EO_gap, FPR_gap, SP_gap, max_group_gap, macro_F1.
+      • fairness_report(counts_dict)  where counts is {"group_i": {...}} or
+        a flat dict with g{i}_tp/fp/fn/tn/n.
+      • fairness_report(y_pred, y_true, sensitive)  OR (y_true, y_pred, sensitive).
+
+    Returns:
+      - accuracy, EO_gap, FPR_gap, SP_gap, max_group_gap, macro_F1,
+      - plus per-group keys: g{i}_TPR, g{i}_FPR, g{i}_PPR, g{i}_Precision, g{i}_Recall.
     """
     # Case 1: counts dict provided
     if len(args) == 1 and isinstance(args[0], dict):
         d = args[0]
-        # Shape A: nested by "group_i"
         if any(k.startswith("group_") for k in d.keys()):
             counts = d
         else:
-            # Shape B: flat g{i}_tp/fp/fn/tn/n
             counts = {}
             g_idxs = sorted({k.split("_", 1)[0] for k in d.keys() if k.startswith("g") and "_" in k})
             for i, gk in enumerate(g_idxs):
@@ -119,7 +117,7 @@ def fairness_report(*args: Any, **kwargs: Any) -> Dict[str, float]:
         accuracy = (total_tp + total_tn) / total_n if total_n > 0 else 0.0
 
     else:
-        # Case 2: arrays provided (either order for first two)
+        # Case 2: arrays provided (order-robust for first two args)
         if len(args) >= 3:
             a0, a1, sensitive = args[:3]
         else:
@@ -128,12 +126,9 @@ def fairness_report(*args: Any, **kwargs: Any) -> Dict[str, float]:
             sensitive = kwargs.get("sensitive")
         y0 = _to_np(a0).astype(int).ravel()
         y1 = _to_np(a1).astype(int).ravel()
-        # Pick the order with higher vanilla accuracy (robust to arg order).
-        acc_pred_true = float(np.mean(y0 == y1))
-        acc_true_pred = acc_pred_true  # symmetric for equality; keep for clarity
-        y_pred, y_true = (y0, y1) if acc_pred_true >= acc_true_pred else (y1, y0)
+        # Accuracy is symmetric; pick (y_pred, y_true) as (y0, y1)
+        y_pred, y_true = y0, y1
         accuracy = float(np.mean(y_pred == y_true))
-
         if sensitive is None:
             return {
                 "accuracy": accuracy,
@@ -143,40 +138,21 @@ def fairness_report(*args: Any, **kwargs: Any) -> Dict[str, float]:
                 "max_group_gap": 0.0,
                 "macro_F1": 0.0,
             }
-
         counts = group_confusion_counts(y_true, y_pred, _to_np(sensitive).ravel())
 
-    # Gaps from counts (common path)
-    groups = sorted(counts.keys())  # deterministic
-    if len(groups) < 2:
-        return {
-            "accuracy": accuracy,
-            "EO_gap": 0.0,
-            "FPR_gap": 0.0,
-            "SP_gap": 0.0,
-            "max_group_gap": 0.0,
-            "macro_F1": _macro_f1_from_counts(counts),
-        }
-
-    def _rates(c):
-        tp, fp, fn, tn = c["TP"], c["FP"], c["FN"], c["TN"]
-        pos, neg = tp + fn, fp + tn
-        tpr = tp / pos if pos > 0 else 0.0
-        fpr = fp / neg if neg > 0 else 0.0
-        ppr = (tp + fp) / (pos + neg) if (pos + neg) > 0 else 0.0
-        return tpr, fpr, ppr
-
-    rates = [_rates(counts[g]) for g in groups]
+    # Per-group rates and gaps
+    groups = sorted(counts.keys(), key=lambda k: int(k.split("_")[1]) if "_" in k else 0)
+    rates = [_rates_from_counts(counts[g]) for g in groups]
     tprs = [r[0] for r in rates]
     fprs = [r[1] for r in rates]
     pprs = [r[2] for r in rates]
 
-    eo_gap = abs(max(tprs) - min(tprs))
-    fpr_gap = abs(max(fprs) - min(fprs))
-    sp_gap = abs(max(pprs) - min(pprs))
+    eo_gap = abs(max(tprs) - min(tprs)) if len(tprs) >= 2 else 0.0
+    fpr_gap = abs(max(fprs) - min(fprs)) if len(fprs) >= 2 else 0.0
+    sp_gap = abs(max(pprs) - min(pprs)) if len(pprs) >= 2 else 0.0
     max_group_gap = max(eo_gap, fpr_gap, sp_gap)
 
-    return {
+    report = {
         "accuracy": float(accuracy),
         "EO_gap": float(eo_gap),
         "FPR_gap": float(fpr_gap),
@@ -184,3 +160,14 @@ def fairness_report(*args: Any, **kwargs: Any) -> Dict[str, float]:
         "max_group_gap": float(max_group_gap),
         "macro_F1": _macro_f1_from_counts(counts),
     }
+
+    # Add per-group keys expected by tests: g{i}_TPR, g{i}_FPR, g{i}_PPR, g{i}_Precision, g{i}_Recall
+    for i, g in enumerate(groups):
+        TPR, FPR, PPR, PREC, REC = rates[i]
+        report[f"g{i}_TPR"] = float(TPR)
+        report[f"g{i}_FPR"] = float(FPR)
+        report[f"g{i}_PPR"] = float(PPR)
+        report[f"g{i}_Precision"] = float(PREC)
+        report[f"g{i}_Recall"] = float(REC)
+
+    return report
