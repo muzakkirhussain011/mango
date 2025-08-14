@@ -1,98 +1,105 @@
-"""Base aggregator and registry."""
-from typing import Protocol, Dict, List, Any, Optional
+# faircare/algos/aggregator.py
+"""
+Aggregator factory & registry.
 
-from typing import Dict, List, Optional, Tuple, Any, Union, Protocol
-import torch
-from abc import ABC, abstractmethod
+Fixes included:
+- Accept fairness_config as dict / dataclass / Pydantic (coerced to dict).
+- Alias 'faircare_fl' → 'fairfed' for backward compatibility.
+- Defensive module loading for known aggregators.
+"""
 
+from __future__ import annotations
 
-class Aggregator(Protocol):
-    """Aggregator protocol."""
-    
-    def client_weights_signal(self, n_clients: int) -> List[float]:
-        """Signal for client sampling weights."""
-        ...
-    
-    def compute_weights(self, client_summaries: List[Dict]) -> torch.Tensor:
-        """Compute aggregation weights from client summaries."""
-        ...
-    
-    def aggregate(
-        self,
-        client_updates: List[torch.Tensor],
-        weights: torch.Tensor
-    ) -> torch.Tensor:
-        """Aggregate client updates with weights."""
-        ...
+from dataclasses import asdict, is_dataclass
+from importlib import import_module
+from typing import Callable, Dict, Any
+
+REGISTRY: Dict[str, Callable[..., Any]] = {}
 
 
-class BaseAggregator(ABC):
-    """Base aggregator implementation."""
-    
-    def __init__(self, n_clients: int, **kwargs):
-        self.n_clients = n_clients
-        self.round = 0
-    
-    def client_weights_signal(self, n_clients: int) -> List[float]:
-        """Default uniform sampling."""
-        return [1.0 / n_clients] * n_clients
-    
-    @abstractmethod
-    def compute_weights(self, client_summaries: List[Dict]) -> torch.Tensor:
-        """Compute aggregation weights."""
-        pass
-    
-    def aggregate(
-        self,
-        client_updates: List[Dict[str, torch.Tensor]],
-        weights: torch.Tensor
-    ) -> Dict[str, torch.Tensor]:
-        """Standard weighted aggregation."""
-        weights = weights / weights.sum()
-        
-        aggregated = {}
-        for key in client_updates[0].keys():
-            stacked = torch.stack([update[key] for update in client_updates])
-            # Reshape weights for broadcasting
-            shape = [len(weights)] + [1] * (stacked.dim() - 1)
-            w = weights.view(shape)
-            aggregated[key] = (stacked * w).sum(dim=0)
-        
-        self.round += 1
-        return aggregated
+def _try_register(name: str, module_name: str) -> None:
+    """
+    Best-effort loader that imports faircare.algos.<module_name> and registers
+    a callable/class to REGISTRY[name] if found.
+    """
+    if name in REGISTRY:
+        return
+    try:
+        mod = import_module(f"faircare.algos.{module_name}")
+    except Exception:
+        return
+
+    # Prefer common builder/class names
+    candidates = [
+        "build", "make", "get",  # builder functions
+        "Aggregator",            # generic class
+        "FedAvgAggregator", "FedProxAggregator", "QFFLAggregator",
+        "AFLAggregator", "FairFATEAggregator", "FairFedAggregator",
+        "FedAvg", "FedProx", "QFFL", "AFL", "FairFATE", "FairFed",
+    ]
+    for cname in candidates:
+        if hasattr(mod, cname):
+            REGISTRY[name] = getattr(mod, cname)
+            return
+
+    # Fallback: first public callable/class in the module
+    for attr in dir(mod):
+        if attr.startswith("_"):
+            continue
+        obj = getattr(mod, attr)
+        if callable(obj):
+            REGISTRY[name] = obj
+            return
+    # If nothing suitable found, leave unregistered.
 
 
-# Algorithm registry
-REGISTRY = {}
+# Pre-load known aggregators (no-op if import fails)
+_try_register("fedavg", "fedavg")
+_try_register("fedprox", "fedprox")
+_try_register("qffl", "qffl")
+_try_register("afl", "afl")
+_try_register("fairfate", "fairfate")
+_try_register("fairfed", "fairfed")
 
 
-def register_aggregator(name: str):
-    """Decorator to register aggregator."""
-    def decorator(cls):
-        REGISTRY[name] = cls
-        return cls
-    return decorator
+def make_aggregator(name: str, *, fairness_config=None, **kwargs):
+    """
+    Factory for aggregators.
 
+    Parameters
+    ----------
+    name : str
+        Aggregator key. Back-compat alias: 'faircare_fl' maps to 'fairfed'.
+    fairness_config : dict | dataclass | pydantic.BaseModel | None
+        Extra fairness-related settings; coerced to dict and merged into kwargs.
+    **kwargs : Any
+        Passed to the aggregator constructor/builder.
+    """
+    # Back-compat name alias
+    if name not in REGISTRY and name == "faircare_fl" and "fairfed" in REGISTRY:
+        name = "fairfed"
 
-def make_aggregator(
-    name: str,
-    n_clients: int,
-    fairness_config: Optional[Dict] = None,
-    algo_config: Optional[Dict] = None,
-    **kwargs
-) -> Aggregator:
-    """Create aggregator by name."""
     if name not in REGISTRY:
-        raise ValueError(f"Unknown aggregator: {name}. Available: {list(REGISTRY.keys())}")
-    
-    cls = REGISTRY[name]
-    
-    # Merge configs
-    all_kwargs = {"n_clients": n_clients}
-    if fairness_config:
-        all_kwargs.update(fairness_config)
-    if algo_config:
-        all_kwargs.update(algo_config)
-    all_kwargs.update(kwargs)
-    
-    return cls(**all_kwargs)
+        available = list(REGISTRY.keys())
+        raise ValueError(f"Unknown aggregator: {name}. Available: {available}")
+
+    # Normalise fairness_config → dict
+    if fairness_config is None:
+        fairness_kwargs = {}
+    elif isinstance(fairness_config, dict):
+        fairness_kwargs = dict(fairness_config)
+    elif is_dataclass(fairness_config):
+        fairness_kwargs = asdict(fairness_config)
+    else:
+        # Pydantic BaseModel or objects with .dict()
+        to_dict = getattr(fairness_config, "dict", None)
+        fairness_kwargs = to_dict() if callable(to_dict) else {}
+
+    all_kwargs = {**kwargs, **fairness_kwargs}
+    builder = REGISTRY[name]
+    return builder(**all_kwargs)
+
+
+# Also expose the alias explicitly if the base is present (harmless if unused)
+if "fairfed" in REGISTRY and "faircare_fl" not in REGISTRY:
+    REGISTRY["faircare_fl"] = REGISTRY["fairfed"]
