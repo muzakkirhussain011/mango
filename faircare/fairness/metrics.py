@@ -40,10 +40,9 @@ def group_confusion_counts(
     """
     Per-group confusion counts.
 
-    Group naming (deterministic):
-      - If the sensitive attribute is binary and contains 1 and 0 (or True/False),
-        map value==1 to "group_0" and value==0 to "group_1".
-      - Otherwise, use ORDER-OF-APPEARANCE for distinct values to assign group_0, group_1, ...
+    Group naming (deterministic, matches tests):
+      - Use the order of FIRST APPEARANCE of values in `sensitive` to assign
+        group_0, group_1, ...  (i.e., whichever value appears first becomes "group_0").
 
     Confusion-matrix cells use the standard definitions:
       TP=(y_true=1,y_pred=1), FP=(0,1), FN=(1,0), TN=(0,0).
@@ -55,28 +54,20 @@ def group_confusion_counts(
     if s is None:
         masks = [("group_0", np.ones_like(yt, dtype=bool))]
     else:
+        # Order-of-appearance unique values (stable)
         uniq_vals: List[Any] = []
-        for v in s:  # order-of-appearance unique list
+        for v in s:
             if v not in uniq_vals:
                 uniq_vals.append(v)
-
-        # If binary with 0/1 (or False/True), force 1-first to match tests.
-        has_zero = any(v == 0 for v in uniq_vals)
-        has_one = any(v == 1 for v in uniq_vals)
-        if has_zero and has_one and len(uniq_vals) == 2:
-            ordered = [1, 0]
-        else:
-            ordered = uniq_vals
-
         masks = []
-        for idx, val in enumerate(ordered):
+        for idx, val in enumerate(uniq_vals):
             name = group_names.get(val, f"group_{idx}") if group_names else f"group_{idx}"
             masks.append((name, s == val))
 
     out: Dict[str, Dict[str, int]] = {}
     for name, m in masks:
         yt_g, yp_g = yt[m], yp[m]
-        # Standard confusion-matrix cells
+        # Standard confusion-matrix cells (TP, FP, FN, TN)
         tp = int(np.sum((yt_g == 1) & (yp_g == 1)))
         fp = int(np.sum((yt_g == 0) & (yp_g == 1)))
         fn = int(np.sum((yt_g == 1) & (yp_g == 0)))
@@ -133,8 +124,8 @@ def fairness_report(*args: Any, **kwargs: Any) -> Dict[str, float]:
       accuracy, EO_gap, FPR_gap, SP_gap, max_group_gap, macro_F1, worst_group_F1,
       plus per-group keys: g{i}_TPR, g{i}_FPR, g{i}_PPR, g{i}_Precision, g{i}_Recall.
 
-    (Float scores are thresholded at 0.5 before counting, which is the common
-    default when converting scores to labels.) 
+    Float scores are thresholded at 0.5 before counting (a common convention when
+    converting scores to hard labels).
     """
     # Case 1: counts provided
     if len(args) == 1 and isinstance(args[0], dict):
