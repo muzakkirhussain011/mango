@@ -1,105 +1,128 @@
 # faircare/algos/aggregator.py
 """
-Aggregator factory & registry.
-
-Fixes included:
-- Accept fairness_config as dict / dataclass / Pydantic (coerced to dict).
-- Alias 'faircare_fl' → 'fairfed' for backward compatibility.
-- Defensive module loading for known aggregators.
+Aggregator base class, registry, and factory.
+This module provides:
+- BaseAggregator: common options + aggregation helpers.
+- register_aggregator: decorator to register aggregators.
+- make_aggregator: factory that builds aggregators and merges fairness_config.
+It also aliases 'faircare_fl' -> 'fairfed' for backward compatibility.
 """
-
 from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 from importlib import import_module
-from typing import Callable, Dict, Any
+from typing import Any, Callable, Dict, List, Mapping, Optional, Type
 
-REGISTRY: Dict[str, Callable[..., Any]] = {}
+import torch
 
 
-def _try_register(name: str, module_name: str) -> None:
+# ── Registry ──────────────────────────────────────────────────────────────────
+REGISTRY: Dict[str, Callable[..., "BaseAggregator"]] = {}
+
+
+def register_aggregator(name: str) -> Callable[[Type["BaseAggregator"]], Type["BaseAggregator"]]:
+    """Class decorator to register an aggregator under a name."""
+    def _wrap(cls: Type["BaseAggregator"]) -> Type["BaseAggregator"]:
+        REGISTRY[name] = lambda **kwargs: cls(**kwargs)
+        return cls
+    return _wrap
+
+
+# ── Base class ────────────────────────────────────────────────────────────────
+class BaseAggregator:
     """
-    Best-effort loader that imports faircare.algos.<module_name> and registers
-    a callable/class to REGISTRY[name] if found.
+    Minimal base aggregator used in tests.
+    Subclasses must implement `compute_weights(client_summaries)` and should
+    honour `epsilon` (weight floor), `weight_clip` (max factor vs uniform), and
+    `weighted` (sample-count weighting where applicable).
     """
-    if name in REGISTRY:
-        return
+    def __init__(
+        self,
+        n_clients: int,
+        weighted: bool = False,
+        epsilon: float = 0.0,
+        weight_clip: float = 0.0,
+        fairness_metric: str = "eo_gap",
+        **_: Any,
+    ) -> None:
+        self.n_clients = n_clients
+        self.weighted = weighted
+        self.epsilon = float(epsilon)
+        self.weight_clip = float(weight_clip)
+        self.fairness_metric = fairness_metric
+
+    # API expected by tests
+    def compute_weights(self, client_summaries: List[Dict[str, Any]]) -> torch.Tensor:
+        raise NotImplementedError
+
+    # Helper to apply floors/clipping then renormalise
+    def _postprocess(self, weights: torch.Tensor) -> torch.Tensor:
+        if self.epsilon > 0:
+            weights = torch.maximum(weights, torch.tensor(self.epsilon, dtype=weights.dtype))
+        if self.weight_clip > 0:
+            # Cap as a multiple of uniform weight (1/n)
+            max_w = (1.0 / len(weights)) * self.weight_clip
+            weights = torch.minimum(weights, torch.tensor(max_w, dtype=weights.dtype))
+        weights = weights / weights.sum()
+        return weights
+
+
+# ── Known modules (ensure registration side-effects) ──────────────────────────
+# Import the modules that define aggregators so their decorators run.
+# Failures are non-fatal: tests only need a subset.
+for mod in (
+    "faircare.algos.fedavg",
+    # The rest are optional; ignore if absent/partial
+    "faircare.algos.fedprox",
+    "faircare.algos.qffl",
+    "faircare.algos.afl",
+    "faircare.algos.fairfate",
+    "faircare.algos.fairfed",
+    "faircare.algos.faircare_fl",
+):
     try:
-        mod = import_module(f"faircare.algos.{module_name}")
+        import_module(mod)
     except Exception:
-        return
-
-    # Prefer common builder/class names
-    candidates = [
-        "build", "make", "get",  # builder functions
-        "Aggregator",            # generic class
-        "FedAvgAggregator", "FedProxAggregator", "QFFLAggregator",
-        "AFLAggregator", "FairFATEAggregator", "FairFedAggregator",
-        "FedAvg", "FedProx", "QFFL", "AFL", "FairFATE", "FairFed",
-    ]
-    for cname in candidates:
-        if hasattr(mod, cname):
-            REGISTRY[name] = getattr(mod, cname)
-            return
-
-    # Fallback: first public callable/class in the module
-    for attr in dir(mod):
-        if attr.startswith("_"):
-            continue
-        obj = getattr(mod, attr)
-        if callable(obj):
-            REGISTRY[name] = obj
-            return
-    # If nothing suitable found, leave unregistered.
+        pass
 
 
-# Pre-load known aggregators (no-op if import fails)
-_try_register("fedavg", "fedavg")
-_try_register("fedprox", "fedprox")
-_try_register("qffl", "qffl")
-_try_register("afl", "afl")
-_try_register("fairfate", "fairfate")
-_try_register("fairfed", "fairfed")
+# ── Factory ───────────────────────────────────────────────────────────────────
+def _to_dict(obj: Any) -> Dict[str, Any]:
+    """Coerce dataclass / pydantic / mapping-like to a plain dict."""
+    if obj is None:
+        return {}
+    if isinstance(obj, Mapping):
+        return dict(obj)
+    if is_dataclass(obj):
+        return asdict(obj)  # type: ignore[arg-type]
+    to_dict = getattr(obj, "dict", None)
+    if callable(to_dict):
+        return to_dict()
+    return {}
 
 
-def make_aggregator(name: str, *, fairness_config=None, **kwargs):
+def make_aggregator(name: str, *, fairness_config: Any | None = None, **kwargs: Any) -> "BaseAggregator":
     """
-    Factory for aggregators.
-
-    Parameters
-    ----------
-    name : str
-        Aggregator key. Back-compat alias: 'faircare_fl' maps to 'fairfed'.
-    fairness_config : dict | dataclass | pydantic.BaseModel | None
-        Extra fairness-related settings; coerced to dict and merged into kwargs.
-    **kwargs : Any
-        Passed to the aggregator constructor/builder.
+    Build an aggregator by name.
+    - Accepts `fairness_config` as dict / dataclass / pydantic and merges into kwargs.
+    - Supports alias 'faircare_fl' → 'fairfed' if the former isn't registered.
     """
-    # Back-compat name alias
+    # Back-compat alias
     if name not in REGISTRY and name == "faircare_fl" and "fairfed" in REGISTRY:
         name = "fairfed"
 
     if name not in REGISTRY:
-        available = list(REGISTRY.keys())
-        raise ValueError(f"Unknown aggregator: {name}. Available: {available}")
+        raise ValueError(f"Unknown aggregator: {name}. Available: {list(REGISTRY.keys())}")
 
-    # Normalise fairness_config → dict
-    if fairness_config is None:
-        fairness_kwargs = {}
-    elif isinstance(fairness_config, dict):
-        fairness_kwargs = dict(fairness_config)
-    elif is_dataclass(fairness_config):
-        fairness_kwargs = asdict(fairness_config)
-    else:
-        # Pydantic BaseModel or objects with .dict()
-        to_dict = getattr(fairness_config, "dict", None)
-        fairness_kwargs = to_dict() if callable(to_dict) else {}
-
+    fairness_kwargs = _to_dict(fairness_config)
     all_kwargs = {**kwargs, **fairness_kwargs}
     builder = REGISTRY[name]
     return builder(**all_kwargs)
 
 
-# Also expose the alias explicitly if the base is present (harmless if unused)
+# Explicit alias binding as well (harmless if both are present)
 if "fairfed" in REGISTRY and "faircare_fl" not in REGISTRY:
     REGISTRY["faircare_fl"] = REGISTRY["fairfed"]
+
+# Backward-compat name expected by some imports
+Aggregator = BaseAggregator
