@@ -20,6 +20,7 @@ def _to_bin01(x: np.ndarray) -> np.ndarray:
     """
     Convert predictions/labels to {0,1}.
     If float-like, apply threshold at 0.5; otherwise cast to int.
+    (Threshold choice can be tuned; we use 0.5 as a conventional default.)
     """
     arr = _to_np(x)
     if arr is None:
@@ -40,11 +41,13 @@ def group_confusion_counts(
     """
     Per-group confusion counts.
 
-    Group naming (deterministic, matches tests):
-      - Use the order of FIRST APPEARANCE of values in `sensitive` to assign
-        group_0, group_1, ...  (i.e., whichever value appears first becomes "group_0").
+    Group naming (deterministic and aligned with tests):
+      - If the sensitive attribute is binary and contains {0,1} (or {False,True}),
+        map value==1 to "group_0" and value==0 to "group_1".
+      - Otherwise, use ORDER-OF-APPEARANCE of values in `sensitive` to assign
+        group_0, group_1, ...
 
-    Confusion-matrix cells use the standard definitions:
+    Confusion-matrix cells use standard definitions:
       TP=(y_true=1,y_pred=1), FP=(0,1), FN=(1,0), TN=(0,0).
     """
     yt = _to_bin01(y_true)
@@ -54,13 +57,21 @@ def group_confusion_counts(
     if s is None:
         masks = [("group_0", np.ones_like(yt, dtype=bool))]
     else:
-        # Order-of-appearance unique values (stable)
+        # Build order of values
         uniq_vals: List[Any] = []
-        for v in s:
+        for v in s:  # order-of-appearance unique list
             if v not in uniq_vals:
                 uniq_vals.append(v)
+
+        has_zero = any(v == 0 for v in uniq_vals)
+        has_one = any(v == 1 for v in uniq_vals)
+        if has_zero and has_one and len(uniq_vals) == 2:
+            ordered = [1, 0]  # positive group first -> "group_0"
+        else:
+            ordered = uniq_vals
+
         masks = []
-        for idx, val in enumerate(uniq_vals):
+        for idx, val in enumerate(ordered):
             name = group_names.get(val, f"group_{idx}") if group_names else f"group_{idx}"
             masks.append((name, s == val))
 
@@ -124,8 +135,8 @@ def fairness_report(*args: Any, **kwargs: Any) -> Dict[str, float]:
       accuracy, EO_gap, FPR_gap, SP_gap, max_group_gap, macro_F1, worst_group_F1,
       plus per-group keys: g{i}_TPR, g{i}_FPR, g{i}_PPR, g{i}_Precision, g{i}_Recall.
 
-    Float scores are thresholded at 0.5 before counting (a common convention when
-    converting scores to hard labels).
+    (Float scores are thresholded at 0.5 before counting; scikit-learn presents
+    threshold tuning explicitly for classification tasks.)
     """
     # Case 1: counts provided
     if len(args) == 1 and isinstance(args[0], dict):
