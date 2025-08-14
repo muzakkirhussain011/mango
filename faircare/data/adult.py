@@ -1,4 +1,5 @@
 """Adult Census Income dataset loader."""
+from typing import Optional, Tuple, Dict
 
 import torch
 import pandas as pd
@@ -7,7 +8,7 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, TensorDataset
 import openml
-from typing import Optional, Tuple, Dict
+from typing import Optional
 import warnings
 import os
 from pathlib import Path

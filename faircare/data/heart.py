@@ -1,4 +1,5 @@
 """Heart Disease dataset loader."""
+from typing import Optional, Dict
 
 import torch
 import pandas as pd
@@ -6,7 +7,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
-from typing import Optional, Dict
+from typing import Optional
 import warnings
 from pathlib import Path
 

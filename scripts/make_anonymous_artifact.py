@@ -1,3 +1,5 @@
+from typing import Dict, List, Optional, Tuple, Any, Union, Protocol
+
 #!/usr/bin/env python3
 """Create anonymous artifact for submission."""
 

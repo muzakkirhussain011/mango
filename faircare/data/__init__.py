@@ -1,5 +1,6 @@
 """Data loading utilities."""
 
+from typing import Dict, List, Optional, Tuple, Any, Union, Protocol
 from faircare.data.adult import load_adult
 from faircare.data.heart import load_heart
 from faircare.data.synth_health import generate_synthetic_health

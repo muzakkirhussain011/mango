@@ -1,7 +1,8 @@
 """FedAvg implementation."""
+from typing import Dict, List
 
 import torch
-from typing import List, Dict
+from typing import List
 from faircare.algos.aggregator import BaseAggregator, register_aggregator
 
 

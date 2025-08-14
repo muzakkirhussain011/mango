@@ -1,9 +1,10 @@
 """Utility functions for federated learning."""
+from typing import Optional, Dict, Any, List, Tuple
 
 import random
 import numpy as np
 import torch
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Dict, List, Optional, Any
 from contextlib import contextmanager
 import json
 from pathlib import Path

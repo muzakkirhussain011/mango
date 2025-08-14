@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Dict, Any
+from typing import Dict, List, Any
 import numpy as np
 from .aggregator import BaseAggregator
 

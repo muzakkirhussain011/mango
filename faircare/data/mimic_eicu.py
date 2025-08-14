@@ -1,9 +1,10 @@
 """MIMIC and eICU dataset stubs with synthetic fallback."""
+from typing import Dict, Optional
 
 import torch
 import numpy as np
 from torch.utils.data import Dataset
-from typing import Dict, Optional
+from typing import Optional
 import warnings
 from faircare.data.synth_health import generate_synthetic_health
 

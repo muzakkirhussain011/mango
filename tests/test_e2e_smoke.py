@@ -1,3 +1,5 @@
+from typing import Dict, List, Optional, Tuple, Any, Union, Protocol
+
 """End-to-end smoke test."""
 
 import pytest

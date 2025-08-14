@@ -1,8 +1,9 @@
 """q-FFL (q-Fair Federated Learning) implementation."""
+from typing import List, Dict
 
 import torch
 import numpy as np
-from typing import List, Dict
+from typing import List
 from faircare.algos.aggregator import BaseAggregator, register_aggregator
 
 

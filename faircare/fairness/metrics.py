@@ -2,7 +2,7 @@
 
 import torch
 import numpy as np
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 from sklearn.metrics import f1_score
 
 
@@ -194,7 +194,7 @@ def compute_group_metrics(
     y_pred: torch.Tensor,
     y_true: torch.Tensor,
     a: torch.Tensor,
-    metrics: List[str] = None
+    metrics: Optional[List[str]] = None
 ) -> Dict:
     """
     Compute specified metrics per group.

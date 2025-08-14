@@ -1,4 +1,5 @@
 """Hyperparameter sweep runner."""
+from typing import Dict, List, Any
 
 import argparse
 import itertools
@@ -7,7 +8,7 @@ import multiprocessing as mp
 from pathlib import Path
 import numpy as np
 import yaml
-from typing import Dict, List, Any
+from typing import Dict, List
 
 from faircare.config import ExperimentConfig
 from faircare.core.trainer import run_experiment

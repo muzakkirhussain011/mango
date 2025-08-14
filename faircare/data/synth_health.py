@@ -1,4 +1,5 @@
 """Synthetic health data generator with controlled bias."""
+from typing import Dict, Optional, Tuple
 
 import torch
 import numpy as np

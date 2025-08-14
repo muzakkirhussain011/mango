@@ -1,9 +1,10 @@
 """Data partitioning utilities for federated learning."""
+from typing import Dict, List, Optional, Tuple, Any
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset, Subset, TensorDataset
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Union, Protocol
 from collections import defaultdict
 
 

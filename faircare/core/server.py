@@ -1,8 +1,9 @@
 """Federated learning server implementation."""
+from typing import Dict, List, Optional, Tuple, Any
 
 import torch
 import torch.nn as nn
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Any
 import copy
 from faircare.core.utils import (
     sample_clients,

@@ -1,3 +1,5 @@
+from typing import Dict, List, Optional, Tuple, Any, Union, Protocol
+
 from faircare.fairness.metrics import fairness_report
 
 def test_composite_gap():

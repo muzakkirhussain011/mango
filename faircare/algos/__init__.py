@@ -1,3 +1,4 @@
+
 """Federated learning algorithms."""
 
 from faircare.algos.aggregator import Aggregator, REGISTRY, make_aggregator

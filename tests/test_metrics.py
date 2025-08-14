@@ -1,3 +1,5 @@
+from typing import Dict, List, Optional, Tuple, Any, Union, Protocol
+
 """Test fairness metrics."""
 
 import pytest

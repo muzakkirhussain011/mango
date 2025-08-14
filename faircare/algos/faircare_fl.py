@@ -1,9 +1,10 @@
 # faircare/algos/faircare_fl.py
 """FairCare-FL: Our proposed fairness-aware federated learning algorithm."""
+from typing import List, Dict, Optional
 
 import torch
 import numpy as np
-from typing import List, Dict, Optional
+from typing import List
 from faircare.algos.aggregator import BaseAggregator, register_aggregator
 
 

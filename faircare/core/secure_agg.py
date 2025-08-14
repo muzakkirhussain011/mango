@@ -1,7 +1,7 @@
 """Secure aggregation implementation (research stub)."""
 
 import torch
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
 import numpy as np
 
 

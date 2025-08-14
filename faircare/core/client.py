@@ -1,4 +1,5 @@
 """Federated learning client implementation."""
+from typing import Dict, Optional, Tuple, Any
 
 import torch
 import torch.nn as nn

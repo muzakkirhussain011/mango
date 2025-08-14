@@ -1,4 +1,5 @@
 """Summary and visualization utilities."""
+from typing import Dict, List, Optional
 
 import pandas as pd
 import matplotlib.pyplot as plt

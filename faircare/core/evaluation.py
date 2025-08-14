@@ -1,8 +1,9 @@
 """Evaluation utilities."""
+from typing import Dict, Tuple, Optional, Any, List
 
 import torch
 import torch.nn as nn
-from typing import Dict, Tuple, Optional, Any
+from typing import Dict, List, Optional, Tuple, Any, Union, Protocol
 import numpy as np
 from scipy import stats
 

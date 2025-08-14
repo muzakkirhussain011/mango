@@ -1,7 +1,8 @@
 """FairFed implementation (simplified fairness weighting)."""
+from typing import List, Dict
 
 import torch
-from typing import List, Dict
+from typing import List
 from faircare.algos.aggregator import BaseAggregator, register_aggregator
 
 
