@@ -1,11 +1,8 @@
 # faircare/algos/aggregator.py
 """
 Aggregator base class, registry, and factory.
-This module provides:
-- BaseAggregator: common options + aggregation helpers.
-- register_aggregator: decorator to register aggregators.
-- make_aggregator: factory that builds aggregators and merges fairness_config.
-It also aliases 'faircare_fl' -> 'fairfed' for backward compatibility.
+Also provides a numerically robust weight-flooring routine that preserves the
+final constraint `w_i >= epsilon` after normalisation.
 """
 from __future__ import annotations
 
@@ -46,7 +43,7 @@ class BaseAggregator:
         **_: Any,
     ) -> None:
         self.n_clients = n_clients
-        self.weighted = weighted
+        self.weighted = bool(weighted)
         self.epsilon = float(epsilon)
         self.weight_clip = float(weight_clip)
         self.fairness_metric = fairness_metric
@@ -55,24 +52,72 @@ class BaseAggregator:
     def compute_weights(self, client_summaries: List[Dict[str, Any]]) -> torch.Tensor:
         raise NotImplementedError
 
-    # Helper to apply floors/clipping then renormalise
+    # Helper to (i) apply a LOWER FLOOR that remains after normalisation,
+    # and (ii) optionally clip to an UPPER bound (multiple of the uniform weight).
+    #
+    # Lower-floor part uses a bounded simplex projection idea: allocate epsilon
+    # to everyone, then renormalise ONLY the "slack" above epsilon so that
+    # sum(weights)=1 and each weight >= epsilon. (See probability-simplex
+    # projection with bound constraints for the general form.) :contentReference[oaicite:3]{index=3}
     def _postprocess(self, weights: torch.Tensor) -> torch.Tensor:
-        if self.epsilon > 0:
-            weights = torch.maximum(weights, torch.tensor(self.epsilon, dtype=weights.dtype))
-        if self.weight_clip > 0:
-            # Cap as a multiple of uniform weight (1/n)
-            max_w = (1.0 / len(weights)) * self.weight_clip
-            weights = torch.minimum(weights, torch.tensor(max_w, dtype=weights.dtype))
-        weights = weights / weights.sum()
-        return weights
+        w = weights.to(dtype=torch.float32)
+        n = w.numel()
+        if n == 0:
+            return w
+
+        # ── Lower bound handling (epsilon) ────────────────────────────────────
+        eps = max(0.0, self.epsilon)
+        if eps > 0.0:
+            # If infeasible (n*eps > 1), fall back to uniform.
+            if eps * n >= 1.0:
+                w = torch.ones_like(w) / n
+            else:
+                # Allocate the mandatory floor to each weight.
+                base = torch.full_like(w, eps)
+                # Raw slack above the floor (negative slacks set to 0)
+                raw = torch.clamp(w - eps, min=0.0)
+                s = raw.sum()
+                target_slack_sum = 1.0 - eps * n
+                if s <= 0:
+                    # Everyone exactly at the floor; distribute uniformly
+                    extra = torch.zeros_like(w)
+                else:
+                    extra = raw * (target_slack_sum / s)
+                w = base + extra
+        else:
+            # Just renormalise if needed
+            s = w.sum()
+            if s > 0:
+                w = w / s
+            else:
+                w = torch.ones_like(w) / n
+
+        # ── Optional upper bound: cap at c * (1/n) if weight_clip > 0 ─────────
+        if self.weight_clip and self.weight_clip > 0.0:
+            cap = self.weight_clip * (1.0 / n)
+            # Iterative clipping: cap and then renormalise remaining mass
+            # while preserving lower floors (if any).
+            # This simple loop converges in at most n steps for test sizes.
+            for _ in range(n):
+                over = w > cap
+                if not torch.any(over):
+                    break
+                excess = (w[over] - cap).sum()
+                w[over] = cap
+                # Redistribute the excess to the non-capped entries while
+                # keeping their current lower floors intact.
+                free = ~over
+                if torch.any(free):
+                    w[free] = w[free] + excess * (w[free] / w[free].sum())
+            # Final normalisation (small numerical drift)
+            w = w / w.sum()
+
+        return w
 
 
 # ── Known modules (ensure registration side-effects) ──────────────────────────
-# Import the modules that define aggregators so their decorators run.
-# Failures are non-fatal: tests only need a subset.
 for mod in (
     "faircare.algos.fedavg",
-    # The rest are optional; ignore if absent/partial
     "faircare.algos.fedprox",
     "faircare.algos.qffl",
     "faircare.algos.afl",
@@ -94,20 +139,25 @@ def _to_dict(obj: Any) -> Dict[str, Any]:
     if isinstance(obj, Mapping):
         return dict(obj)
     if is_dataclass(obj):
-        return asdict(obj)  # type: ignore[arg-type]
-    to_dict = getattr(obj, "dict", None)
+        # Official: dataclasses.asdict → dict of field names to values. :contentReference[oaicite:4]{index=4}
+        return asdict(obj)
+    to_dict = getattr(obj, "to_dict", None) or getattr(obj, "dict", None)
     if callable(to_dict):
-        return to_dict()
-    return {}
+        try:
+            return to_dict()
+        except TypeError:
+            return to_dict  # in case it's a @property returning a dict
+    # Fallback
+    d = getattr(obj, "__dict__", None)
+    return dict(d) if isinstance(d, dict) else {}
 
 
 def make_aggregator(name: str, *, fairness_config: Any | None = None, **kwargs: Any) -> "BaseAggregator":
     """
     Build an aggregator by name.
-    - Accepts `fairness_config` as dict / dataclass / pydantic and merges into kwargs.
+    - Accepts `fairness_config` as dict / dataclass / Pydantic-like and merges into kwargs.
     - Supports alias 'faircare_fl' → 'fairfed' if the former isn't registered.
     """
-    # Back-compat alias
     if name not in REGISTRY and name == "faircare_fl" and "fairfed" in REGISTRY:
         name = "fairfed"
 
@@ -120,7 +170,7 @@ def make_aggregator(name: str, *, fairness_config: Any | None = None, **kwargs: 
     return builder(**all_kwargs)
 
 
-# Explicit alias binding as well (harmless if both are present)
+# Explicit alias binding (harmless if both are present)
 if "fairfed" in REGISTRY and "faircare_fl" not in REGISTRY:
     REGISTRY["faircare_fl"] = REGISTRY["fairfed"]
 
