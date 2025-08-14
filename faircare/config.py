@@ -153,14 +153,16 @@ class ExperimentConfig:
             "local_epochs": ("training", "local_epochs"),
             "lr": ("training", "lr"),
             "weight_decay": ("training", "weight_decay"),
-            "seed": ("seed", None),
-            "logdir": ("logdir", None),
+            "seed": (None, "seed"),  # Top-level field
+            "logdir": (None, "logdir"),  # Top-level field
         }
         
         for arg_name, (config_section, config_field) in arg_mapping.items():
             if hasattr(args, arg_name) and getattr(args, arg_name) is not None:
                 if config_section is None:
-                    setattr(self, arg_name, getattr(args, arg_name))
+                    # Handle top-level fields
+                    field_name = config_field if config_field else arg_name
+                    setattr(self, field_name, getattr(args, arg_name))
                 else:
                     section = getattr(self, config_section)
                     if config_field:
