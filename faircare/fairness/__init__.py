@@ -1,14 +1,22 @@
+# faircare/fairness/__init__.py
+"""
+Public API for fairness utilities.
+Re-exports flexible fairness_report and group_confusion_counts for tests.
+"""
 
-"""Fairness metrics and utilities."""
+from .metrics import group_confusion_counts, fairness_report
 
-from faircare.fairness.metrics import (
-    group_confusion_counts,
-    fairness_report,
-    compute_group_metrics
-)
-
-__all__ = [
-    "group_confusion_counts",
-    "fairness_report",
-    "compute_group_metrics"
-]
+# Optional trackers if your code uses them; harmless if absent in tests
+try:
+    from .global_stats import FairnessTracker, RunningStats  # type: ignore
+    __all__ = [
+        "group_confusion_counts",
+        "fairness_report",
+        "FairnessTracker",
+        "RunningStats",
+    ]
+except Exception:
+    __all__ = [
+        "group_confusion_counts",
+        "fairness_report",
+    ]
