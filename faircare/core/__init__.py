@@ -2,18 +2,15 @@
 """
 Core package initialisation.
 
-We install a small shim so dataclass configs (e.g., SecureAggConfig) expose a
-`.to_dict()` method. This avoids AttributeError in trainer code that expects it.
+We attach a `.to_dict()` method to any dataclass types found in configuration
+modules so that code like `config.secure_agg.to_dict()` always works—even if the
+original class didn't define it explicitly.
 """
 from __future__ import annotations
 
 from dataclasses import is_dataclass, asdict
-
-# Best-effort patching only if these classes exist.
-try:
-    from . import config as _cfg  # type: ignore
-except Exception:
-    _cfg = None  # type: ignore
+import types
+import sys
 
 
 def _as_dict(self):
@@ -23,16 +20,28 @@ def _as_dict(self):
     return dict(d) if isinstance(d, dict) else {}
 
 
-def _patch_to_dict(cls_name: str):
-    if _cfg is None:
-        return
-    cls = getattr(_cfg, cls_name, None)
-    if cls is not None and not hasattr(cls, "to_dict"):
-        try:
-            setattr(cls, "to_dict", _as_dict)
-        except Exception:
-            pass
+def _patch_module_dataclasses(mod: types.ModuleType):
+    for name in dir(mod):
+        cls = getattr(mod, name, None)
+        # dataclass classes have __dataclass_fields__
+        if isinstance(cls, type) and hasattr(cls, "__dataclass_fields__"):
+            if not hasattr(cls, "to_dict"):
+                try:
+                    setattr(cls, "to_dict", _as_dict)
+                except Exception:
+                    pass
 
 
-for _name in ("SecureAggConfig", "FairnessConfig", "AlgoConfig", "TrainingConfig"):
-    _patch_to_dict(_name)
+# Try plausible config modules
+_candidates = [
+    "faircare.core.config",
+    "faircare.config",
+    "faircare.secure_agg.config",
+]
+
+for modname in _candidates:
+    try:
+        __import__(modname)
+        _patch_module_dataclasses(sys.modules[modname])
+    except Exception:
+        pass
