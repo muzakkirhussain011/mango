@@ -15,6 +15,20 @@ def _to_np(x):
     return np.asarray(x)
 
 
+def _to_bin01(x: np.ndarray) -> np.ndarray:
+    """
+    Convert predictions/labels to {0,1}.
+    If float-like, apply threshold at 0.5; otherwise cast to int.
+    """
+    arr = _to_np(x)
+    if arr is None:
+        return arr
+    arr = np.asarray(arr)
+    if arr.dtype.kind in ("f", "c"):  # float/complex -> threshold
+        return (arr >= 0.5).astype(int).ravel()
+    return arr.astype(int).ravel()
+
+
 def group_confusion_counts(
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -24,21 +38,21 @@ def group_confusion_counts(
     """
     Per-group confusion counts.
 
-    Group naming rule (to match tests):
-      - If the sensitive attribute contains a value equal to 0 (numeric or bool False),
+    Group naming (to match tests):
+      - If the sensitive attribute contains a value equal to 0 (or False),
         that value is mapped to "group_0".
-      - The remaining distinct values are ordered ascending and mapped to group_1, group_2, ...
+      - Remaining distinct values are ordered ascending and mapped to group_1, group_2, ...
       - If 0 is not present, groups are ordered ascending.
     """
-    yt = _to_np(y_true).astype(int).ravel()
-    yp = _to_np(y_pred).astype(int).ravel()
+    yt = _to_bin01(y_true)
+    yp = _to_bin01(y_pred)
     s = _to_np(sensitive).ravel() if sensitive is not None else None
 
     if s is None:
         masks = [("group_0", np.ones_like(yt, dtype=bool))]
     else:
         uniq_vals: List[Any] = list(np.unique(s))
-        # Put "0" (or False) first if present
+        # Put 0 first if present (works for 0, 0.0, False)
         if any((v == 0) for v in uniq_vals):
             uniq_vals = [v for v in uniq_vals if not (v == 0)]
             uniq_vals = [0] + uniq_vals
@@ -85,7 +99,7 @@ def _macro_f1_from_counts(counts: Dict[str, Dict[str, int]]) -> float:
 
 
 def _worst_group_f1_from_counts(counts: Dict[str, Dict[str, int]]) -> float:
-    """Minimum F1 across groups (used by tests as worst_group_F1)."""
+    """Minimum F1 across groups."""
     vals = []
     for c in counts.values():
         tp, fp, fn = c["TP"], c["FP"], c["FN"]
@@ -134,8 +148,8 @@ def fairness_report(*args: Any, **kwargs: Any) -> Dict[str, float]:
             a0 = kwargs.get("y_pred")
             a1 = kwargs.get("y_true")
             sensitive = kwargs.get("sensitive")
-        y_pred = _to_np(a0).astype(int).ravel()
-        y_true = _to_np(a1).astype(int).ravel()
+        y_pred = _to_bin01(a0)
+        y_true = _to_bin01(a1)
         accuracy = float(np.mean(y_pred == y_true))
         if sensitive is None:
             return {
@@ -171,7 +185,7 @@ def fairness_report(*args: Any, **kwargs: Any) -> Dict[str, float]:
         "worst_group_F1": _worst_group_f1_from_counts(counts),
     }
 
-    # Add per-group keys expected by tests
+    # Add per-group keys (handy for debugging & tests)
     for i, g in enumerate(groups):
         TPR, FPR, PPR, PREC, REC = rates[i]
         report[f"g{i}_TPR"] = float(TPR)
@@ -180,6 +194,6 @@ def fairness_report(*args: Any, **kwargs: Any) -> Dict[str, float]:
         report[f"g{i}_Precision"] = float(PREC)
         report[f"g{i}_Recall"] = float(REC)
 
-    # Helpful for logging / downstream use
-    report["group_stats"] = counts  # not used by tests but convenient
+    # Also return the raw counts (not required by tests but useful)
+    report["group_stats"] = counts
     return report
