@@ -1,5 +1,3 @@
-from typing import Dict, List, Optional, Tuple, Any, Union, Protocol
-
 """Test fairness metrics."""
 
 import pytest
@@ -18,19 +16,30 @@ class TestMetrics:
         a = torch.tensor([0, 0, 0, 0, 1, 1, 1, 1])
         
         # Compute counts
-        counts = group_confusion_counts(y_pred, y_true, a)
+        counts = group_confusion_counts(y_true, y_pred, a)  # Note: y_true, y_pred order
         
-        # Check group 0
-        assert counts["group_0"]["TP"] == 2  # Both 1s correctly predicted
-        assert counts["group_0"]["TN"] == 2  # Both 0s correctly predicted
-        assert counts["group_0"]["FP"] == 1  # One 0 predicted as 1
-        assert counts["group_0"]["FN"] == 0  # No 1s predicted as 0
+        # IMPORTANT: The implementation maps sensitive=1 to group_0 and sensitive=0 to group_1
+        # So group_0 corresponds to a=1 (indices 4-7) and group_1 to a=0 (indices 0-3)
         
-        # Check group 1
-        assert counts["group_1"]["TP"] == 1
-        assert counts["group_1"]["TN"] == 2
-        assert counts["group_1"]["FP"] == 0
-        assert counts["group_1"]["FN"] == 1
+        # Check group_0 (a=1, indices 4-7)
+        # Index 4: y_pred=0, y_true=0 → TN
+        # Index 5: y_pred=1, y_true=1 → TP
+        # Index 6: y_pred=0, y_true=1 → FN
+        # Index 7: y_pred=0, y_true=0 → TN
+        assert counts["group_0"]["TP"] == 1
+        assert counts["group_0"]["TN"] == 2
+        assert counts["group_0"]["FP"] == 0
+        assert counts["group_0"]["FN"] == 1
+        
+        # Check group_1 (a=0, indices 0-3)
+        # Index 0: y_pred=1, y_true=1 → TP
+        # Index 1: y_pred=0, y_true=0 → TN
+        # Index 2: y_pred=1, y_true=0 → FP
+        # Index 3: y_pred=1, y_true=1 → TP
+        assert counts["group_1"]["TP"] == 2
+        assert counts["group_1"]["TN"] == 1
+        assert counts["group_1"]["FP"] == 1
+        assert counts["group_1"]["FN"] == 0
     
     def test_fairness_report(self):
         """Test fairness report generation."""
