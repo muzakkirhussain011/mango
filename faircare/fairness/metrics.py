@@ -1,8 +1,9 @@
+"""Fairness metrics and differentiable loss functions."""
 from __future__ import annotations
-
 from typing import Dict, Any, Hashable, Optional, Tuple, List
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -17,11 +18,7 @@ def _to_np(x):
 
 
 def _to_bin01(x: np.ndarray) -> np.ndarray:
-    """
-    Convert predictions/labels to {0,1}.
-    If float-like, apply threshold at 0.5; otherwise cast to int.
-    (Threshold choice can be tuned; we use 0.5 as a conventional default.)
-    """
+    """Convert predictions/labels to {0,1}."""
     arr = _to_np(x)
     if arr is None:
         return arr
@@ -38,18 +35,7 @@ def group_confusion_counts(
     sensitive: np.ndarray,
     group_names: Optional[Dict[Hashable, str]] = None,
 ) -> Dict[str, Dict[str, int]]:
-    """
-    Per-group confusion counts.
-
-    Group naming (deterministic and aligned with tests):
-      - If the sensitive attribute is binary and contains {0,1} (or {False,True}),
-        map value==1 to "group_0" and value==0 to "group_1".
-      - Otherwise, use ORDER-OF-APPEARANCE of values in `sensitive` to assign
-        group_0, group_1, ...
-
-    Confusion-matrix cells use standard definitions:
-      TP=(y_true=1,y_pred=1), FP=(0,1), FN=(1,0), TN=(0,0).
-    """
+    """Per-group confusion counts."""
     yt = _to_bin01(y_true)
     yp = _to_bin01(y_pred)
     s = _to_np(sensitive).ravel() if sensitive is not None else None
@@ -126,18 +112,7 @@ def _worst_group_f1_from_counts(counts: Dict[str, Dict[str, int]]) -> float:
 
 
 def fairness_report(*args: Any, **kwargs: Any) -> Dict[str, float]:
-    """
-    Build a fairness report from either:
-      • counts dict: {"group_0": {"TP":...}, "group_1": {...}} OR flat g{i}_* keys
-      • arrays: (y_pred, y_true, sensitive) or (y_true, y_pred, sensitive)
-
-    Returns:
-      accuracy, EO_gap, FPR_gap, SP_gap, max_group_gap, macro_F1, worst_group_F1,
-      plus per-group keys: g{i}_TPR, g{i}_FPR, g{i}_PPR, g{i}_Precision, g{i}_Recall.
-
-    (Float scores are thresholded at 0.5 before counting; scikit-learn presents
-    threshold tuning explicitly for classification tasks.)
-    """
+    """Build a fairness report from arrays or counts."""
     # Case 1: counts provided
     if len(args) == 1 and isinstance(args[0], dict):
         d = args[0]
@@ -203,7 +178,7 @@ def fairness_report(*args: Any, **kwargs: Any) -> Dict[str, float]:
         "worst_group_F1": _worst_group_f1_from_counts(counts),
     }
 
-    # Add per-group keys (handy for debugging & tests)
+    # Add per-group keys
     for i, g in enumerate(groups):
         TPR, FPR, PPR, PREC, REC = rates[i]
         report[f"g{i}_TPR"] = float(TPR)
@@ -215,3 +190,205 @@ def fairness_report(*args: Any, **kwargs: Any) -> Dict[str, float]:
     # Raw counts for downstream consumers
     report["group_stats"] = counts
     return report
+
+
+# ── Differentiable Fairness Loss Functions ────────────────────────────────────
+def compute_fairness_loss(
+    outputs: torch.Tensor,
+    labels: torch.Tensor,
+    sensitive: torch.Tensor,
+    loss_type: str = 'eo',
+    epsilon: float = 1e-7,
+    device: str = 'cpu'
+) -> torch.Tensor:
+    """
+    Compute differentiable fairness loss for local training.
+    
+    Args:
+        outputs: Model outputs (logits)
+        labels: True labels
+        sensitive: Sensitive attribute values
+        loss_type: Type of fairness loss ('eo', 'sp', 'eo_sp_combined')
+        epsilon: Small value for numerical stability
+        device: Device for computation
+    
+    Returns:
+        Fairness loss value
+    """
+    # Convert to probabilities
+    probs = torch.sigmoid(outputs)
+    
+    # Get unique sensitive values
+    unique_groups = torch.unique(sensitive)
+    
+    if len(unique_groups) < 2:
+        # No fairness loss if only one group
+        return torch.tensor(0.0, device=device)
+    
+    if loss_type == 'eo':
+        return equal_opportunity_loss(probs, labels, sensitive, epsilon, device)
+    elif loss_type == 'sp':
+        return statistical_parity_loss(probs, labels, sensitive, epsilon, device)
+    elif loss_type == 'eo_sp_combined':
+        eo_loss = equal_opportunity_loss(probs, labels, sensitive, epsilon, device)
+        sp_loss = statistical_parity_loss(probs, labels, sensitive, epsilon, device)
+        return 0.6 * eo_loss + 0.4 * sp_loss
+    elif loss_type == 'fpr':
+        return false_positive_rate_loss(probs, labels, sensitive, epsilon, device)
+    elif loss_type == 'comprehensive':
+        # Comprehensive fairness loss combining multiple metrics
+        eo_loss = equal_opportunity_loss(probs, labels, sensitive, epsilon, device)
+        sp_loss = statistical_parity_loss(probs, labels, sensitive, epsilon, device)
+        fpr_loss = false_positive_rate_loss(probs, labels, sensitive, epsilon, device)
+        return 0.5 * eo_loss + 0.3 * sp_loss + 0.2 * fpr_loss
+    else:
+        raise ValueError(f"Unknown loss type: {loss_type}")
+
+
+def equal_opportunity_loss(
+    probs: torch.Tensor,
+    labels: torch.Tensor,
+    sensitive: torch.Tensor,
+    epsilon: float = 1e-7,
+    device: str = 'cpu'
+) -> torch.Tensor:
+    """
+    Compute Equal Opportunity loss (difference in TPR between groups).
+    """
+    unique_groups = torch.unique(sensitive)
+    tprs = []
+    
+    for group in unique_groups:
+        group_mask = (sensitive == group)
+        group_positive_mask = group_mask & (labels == 1)
+        
+        if group_positive_mask.sum() > 0:
+            # TPR for this group (soft version using probabilities)
+            group_tpr = (probs[group_positive_mask]).mean()
+            tprs.append(group_tpr)
+    
+    if len(tprs) < 2:
+        return torch.tensor(0.0, device=device)
+    
+    # Compute pairwise differences and return squared sum
+    loss = torch.tensor(0.0, device=device)
+    for i in range(len(tprs)):
+        for j in range(i + 1, len(tprs)):
+            loss += (tprs[i] - tprs[j]) ** 2
+    
+    return loss
+
+
+def statistical_parity_loss(
+    probs: torch.Tensor,
+    labels: torch.Tensor,
+    sensitive: torch.Tensor,
+    epsilon: float = 1e-7,
+    device: str = 'cpu'
+) -> torch.Tensor:
+    """
+    Compute Statistical Parity loss (difference in positive prediction rates).
+    """
+    unique_groups = torch.unique(sensitive)
+    pprs = []
+    
+    for group in unique_groups:
+        group_mask = (sensitive == group)
+        
+        if group_mask.sum() > 0:
+            # Positive prediction rate for this group (soft version)
+            group_ppr = probs[group_mask].mean()
+            pprs.append(group_ppr)
+    
+    if len(pprs) < 2:
+        return torch.tensor(0.0, device=device)
+    
+    # Compute pairwise differences and return squared sum
+    loss = torch.tensor(0.0, device=device)
+    for i in range(len(pprs)):
+        for j in range(i + 1, len(pprs)):
+            loss += (pprs[i] - pprs[j]) ** 2
+    
+    return loss
+
+
+def false_positive_rate_loss(
+    probs: torch.Tensor,
+    labels: torch.Tensor,
+    sensitive: torch.Tensor,
+    epsilon: float = 1e-7,
+    device: str = 'cpu'
+) -> torch.Tensor:
+    """
+    Compute False Positive Rate parity loss.
+    """
+    unique_groups = torch.unique(sensitive)
+    fprs = []
+    
+    for group in unique_groups:
+        group_mask = (sensitive == group)
+        group_negative_mask = group_mask & (labels == 0)
+        
+        if group_negative_mask.sum() > 0:
+            # FPR for this group (soft version)
+            group_fpr = probs[group_negative_mask].mean()
+            fprs.append(group_fpr)
+    
+    if len(fprs) < 2:
+        return torch.tensor(0.0, device=device)
+    
+    # Compute pairwise differences and return squared sum
+    loss = torch.tensor(0.0, device=device)
+    for i in range(len(fprs)):
+        for j in range(i + 1, len(fprs)):
+            loss += (fprs[i] - fprs[j]) ** 2
+    
+    return loss
+
+
+def equalized_odds_loss(
+    probs: torch.Tensor,
+    labels: torch.Tensor,
+    sensitive: torch.Tensor,
+    epsilon: float = 1e-7,
+    device: str = 'cpu'
+) -> torch.Tensor:
+    """
+    Compute Equalized Odds loss (combination of EO and FPR parity).
+    """
+    eo_loss = equal_opportunity_loss(probs, labels, sensitive, epsilon, device)
+    fpr_loss = false_positive_rate_loss(probs, labels, sensitive, epsilon, device)
+    return eo_loss + fpr_loss
+
+
+def balanced_accuracy_loss(
+    probs: torch.Tensor,
+    labels: torch.Tensor,
+    sensitive: torch.Tensor,
+    epsilon: float = 1e-7,
+    device: str = 'cpu'
+) -> torch.Tensor:
+    """
+    Compute balanced accuracy loss across groups.
+    """
+    unique_groups = torch.unique(sensitive)
+    group_accuracies = []
+    
+    for group in unique_groups:
+        group_mask = (sensitive == group)
+        
+        if group_mask.sum() > 0:
+            # Soft accuracy for this group
+            group_correct = (probs[group_mask] * labels[group_mask] + 
+                           (1 - probs[group_mask]) * (1 - labels[group_mask]))
+            group_acc = group_correct.mean()
+            group_accuracies.append(group_acc)
+    
+    if len(group_accuracies) < 2:
+        return torch.tensor(0.0, device=device)
+    
+    # Penalize variance in accuracies
+    accuracies_tensor = torch.stack(group_accuracies)
+    variance = torch.var(accuracies_tensor)
+    
+    return variance
