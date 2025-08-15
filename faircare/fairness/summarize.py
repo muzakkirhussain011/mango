@@ -2,6 +2,7 @@
 from typing import Dict, List, Optional
 
 import pandas as pd
+import numpy as np  # FIX: Added missing import
 import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Dict, List, Optional
@@ -35,10 +36,21 @@ def create_summary_table(
         algo_summary = {"algorithm": algo_name}
         
         for metric in metrics:
-            values = [run.get(metric, 0) for run in runs]
+            values = []
+            for run in runs:
+                # Try multiple prefixes for metrics
+                for prefix in ["final_", "test_", ""]:
+                    key = f"{prefix}{metric}"
+                    if key in run:
+                        values.append(run[key])
+                        break
+            
             if values:
                 algo_summary[f"{metric}_mean"] = np.mean(values)
                 algo_summary[f"{metric}_std"] = np.std(values)
+            else:
+                algo_summary[f"{metric}_mean"] = 0.0
+                algo_summary[f"{metric}_std"] = 0.0
         
         summary_data.append(algo_summary)
     
