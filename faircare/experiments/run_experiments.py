@@ -82,6 +82,25 @@ def parse_args():
     return parser.parse_args()
 
 
+def get_dataset_dimensions(dataset_name: str, sensitive_attr: str = None) -> int:
+    """Get the actual input dimensions for a dataset."""
+    from faircare.data import load_dataset
+    
+    # Load a small sample to get dimensions
+    if dataset_name == "adult":
+        # Load just to get dimensions
+        data = load_dataset("adult", sensitive_attribute=sensitive_attr)
+        return data["n_features"]
+    elif dataset_name == "heart":
+        return 13
+    elif dataset_name == "synth_health":
+        return 20
+    elif dataset_name in ["mimic", "eicu"]:
+        return 50
+    else:
+        return 30  # default
+
+
 def main():
     """Main experiment entry point."""
     args = parse_args()
@@ -129,15 +148,11 @@ def main():
     config.name = f"{args.algo}_{args.dataset}_seed{args.seed}"
     config.logdir = Path(args.logdir) / args.algo / args.dataset / f"seed{args.seed}"
     
-    # Adjust model dimensions based on dataset
-    if args.dataset == "adult":
-        config.model.input_dim = 108  # Adult has many features after encoding
-    elif args.dataset == "heart":
-        config.model.input_dim = 13
-    elif args.dataset == "synth_health":
-        config.model.input_dim = 20
-    elif args.dataset in ["mimic", "eicu"]:
-        config.model.input_dim = 50
+    # Get actual dataset dimensions
+    print(f"Getting dataset dimensions for {args.dataset}...")
+    actual_dim = get_dataset_dimensions(args.dataset, args.sensitive)
+    config.model.input_dim = actual_dim
+    print(f"Dataset has {actual_dim} features")
     
     # Run experiment
     print(f"Starting experiment: {config.name}")
@@ -147,6 +162,7 @@ def main():
     print(f"Rounds: {config.training.rounds}")
     print(f"Seed: {config.seed}")
     print(f"Log directory: {config.logdir}")
+    print(f"Model input dimension: {config.model.input_dim}")
     
     results = run_experiment(config)
     
