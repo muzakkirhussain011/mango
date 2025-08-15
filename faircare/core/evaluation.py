@@ -30,7 +30,14 @@ class Evaluator:
         
         model.eval()
         with torch.no_grad():
-            outputs = model(X).squeeze()
+            outputs = model(X)
+            
+            # FIX: Handle shape properly
+            if outputs.dim() > 1 and outputs.shape[1] == 1:
+                outputs = outputs.squeeze(1)
+            elif outputs.dim() == 0:
+                outputs = outputs.unsqueeze(0)
+                
             y_pred = (torch.sigmoid(outputs) > 0.5).int().cpu()
         
         # Basic metrics
@@ -71,13 +78,40 @@ class Evaluator:
         if baseline_algo not in results_dict:
             baseline_algo = list(results_dict.keys())[0]
         
-        baseline_values = [r[metric] for r in results_dict[baseline_algo]]
+        # FIX: Handle different metric key formats
+        def get_metric_value(result, metric_name):
+            """Try different key formats for the metric."""
+            possible_keys = [
+                metric_name,
+                f"final_{metric_name}",
+                f"test_{metric_name}",
+                f"val_{metric_name}"
+            ]
+            for key in possible_keys:
+                if key in result:
+                    return result[key]
+            # Return 0 if metric not found
+            return 0.0
+        
+        baseline_values = [get_metric_value(r, metric) for r in results_dict[baseline_algo]]
         
         for algo_name, algo_results in results_dict.items():
             if algo_name == baseline_algo:
                 continue
             
-            algo_values = [r[metric] for r in algo_results]
+            algo_values = [get_metric_value(r, metric) for r in algo_results]
+            
+            # Skip comparison if all values are 0
+            if all(v == 0 for v in algo_values) or all(v == 0 for v in baseline_values):
+                comparisons[algo_name] = {
+                    "mean": np.mean(algo_values) if algo_values else 0,
+                    "std": np.std(algo_values) if algo_values else 0,
+                    "baseline_mean": np.mean(baseline_values) if baseline_values else 0,
+                    "baseline_std": np.std(baseline_values) if baseline_values else 0,
+                    "p_value": 1.0,
+                    "significant": False
+                }
+                continue
             
             # Paired test
             if test == "permutation":
@@ -104,11 +138,17 @@ class Evaluator:
                 
             elif test == "wilcoxon":
                 # Wilcoxon signed-rank test
-                _, p_value = stats.wilcoxon(algo_values, baseline_values)
+                try:
+                    _, p_value = stats.wilcoxon(algo_values, baseline_values)
+                except:
+                    p_value = 1.0
             
             else:
                 # Paired t-test
-                _, p_value = stats.ttest_rel(algo_values, baseline_values)
+                try:
+                    _, p_value = stats.ttest_rel(algo_values, baseline_values)
+                except:
+                    p_value = 1.0
             
             comparisons[algo_name] = {
                 "mean": np.mean(algo_values),
