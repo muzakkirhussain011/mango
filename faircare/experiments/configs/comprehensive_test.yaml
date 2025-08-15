@@ -1,0 +1,28 @@
+# faircare/experiments/configs/comprehensive_test.yaml
+base:
+  model:
+    model_type: "mlp"
+    hidden_dims: [32, 16]  # Smaller model for faster testing
+    output_dim: 1
+    dropout: 0.1
+  data:
+    dataset: "adult"
+    sensitive_attribute: "sex"
+    n_clients: 5
+    partition: "dirichlet"
+    alpha: 0.5
+    batch_size: 64  # Larger batch for faster convergence
+  training:
+    rounds: 10  # More rounds for better convergence
+    local_epochs: 2  # More local training
+    eval_every: 1
+    lr: 0.05  # Higher learning rate for faster convergence
+    device: "cpu"
+    
+param_grid:
+  # Test ALL algorithms
+  training.algo: ["fedavg", "fedprox", "qffl", "afl", "fairfate", "faircare_fl"]
+  
+seeds: [0, 1]  # 2 seeds for quick statistical validation
+
+# Total experiments: 6 algorithms × 2 seeds = 12 experiments
