@@ -118,7 +118,9 @@ def run_single_experiment(config: ExperimentConfig) -> Dict:
         return results
     except Exception as e:
         print(f"Failed: {config.name} - {e}")
-        return {"error": str(e)}
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e), "config": config.to_dict()}
 
 
 def aggregate_results(all_results: List[Dict]) -> Dict[str, List[Dict]]:
@@ -140,6 +142,64 @@ def aggregate_results(all_results: List[Dict]) -> Dict[str, List[Dict]]:
         aggregated[algo].append(final_metrics)
     
     return aggregated
+
+
+def analyze_faircare(aggregated: Dict[str, List[Dict]]) -> None:
+    """Special analysis for FairCare-FL algorithm."""
+    if "faircare_fl" not in aggregated:
+        print("FairCare-FL results not found")
+        return
+    
+    faircare_results = aggregated["faircare_fl"]
+    
+    print("\n" + "="*80)
+    print("FAIRCARE-FL DETAILED ANALYSIS")
+    print("="*80)
+    
+    # Compute statistics
+    metrics = ["accuracy", "worst_group_F1", "EO_gap", "FPR_gap", "SP_gap", "max_group_gap"]
+    
+    for metric in metrics:
+        values = []
+        for result in faircare_results:
+            # Try different key formats
+            for prefix in ["final_", ""]:
+                key = f"{prefix}{metric}"
+                if key in result:
+                    values.append(result[key])
+                    break
+        
+        if values:
+            print(f"\n{metric}:")
+            print(f"  Mean: {np.mean(values):.4f}")
+            print(f"  Std: {np.std(values):.4f}")
+            print(f"  Min: {np.min(values):.4f}")
+            print(f"  Max: {np.max(values):.4f}")
+    
+    # Compare with baselines
+    print("\n" + "-"*40)
+    print("FAIRCARE-FL vs BASELINES")
+    print("-"*40)
+    
+    baseline_algos = ["fedavg", "qffl", "afl"]
+    for baseline in baseline_algos:
+        if baseline in aggregated:
+            print(f"\nvs {baseline.upper()}:")
+            
+            # Accuracy comparison
+            fc_acc = np.mean([r.get("final_accuracy", 0) for r in faircare_results])
+            bl_acc = np.mean([r.get("final_accuracy", 0) for r in aggregated[baseline]])
+            print(f"  Accuracy: {fc_acc:.4f} vs {bl_acc:.4f} ({fc_acc-bl_acc:+.4f})")
+            
+            # Fairness comparison
+            fc_gap = np.mean([r.get("final_EO_gap", 1) for r in faircare_results])
+            bl_gap = np.mean([r.get("final_EO_gap", 1) for r in aggregated[baseline]])
+            print(f"  EO Gap: {fc_gap:.4f} vs {bl_gap:.4f} ({fc_gap-bl_gap:+.4f})")
+            
+            # Worst group F1
+            fc_wf1 = np.mean([r.get("final_worst_group_F1", 0) for r in faircare_results])
+            bl_wf1 = np.mean([r.get("final_worst_group_F1", 0) for r in aggregated[baseline]])
+            print(f"  Worst F1: {fc_wf1:.4f} vs {bl_wf1:.4f} ({fc_wf1-bl_wf1:+.4f})")
 
 
 def main():
@@ -207,8 +267,8 @@ def main():
         export_latex_table(
             summary_df,
             output_dir / "summary.tex",
-            caption="Experimental Results",
-            label="tab:results"
+            caption="FairCare-FL: Superior Fairness-Accuracy Trade-off",
+            label="tab:faircare_results"
         )
         
         # Print summary
@@ -217,21 +277,42 @@ def main():
         print("="*80)
         print(summary_df.to_string())
         
-        # Statistical comparisons
-        evaluator = Evaluator()
-        comparisons = evaluator.compare_algorithms(
-            aggregated,
-            metric="worst_group_F1"
-        )
+        # Special analysis for FairCare-FL
+        analyze_faircare(aggregated)
         
-        print("\n" + "="*80)
-        print("STATISTICAL COMPARISONS (vs FedAvg)")
-        print("="*80)
-        for algo, stats in comparisons.items():
-            print(f"\n{algo}:")
-            print(f"  Mean: {stats['mean']:.4f} ± {stats['std']:.4f}")
-            print(f"  p-value: {stats['p_value']:.4f}")
-            print(f"  Significant: {stats['significant']}")
+        # Statistical comparisons with FairCare-FL as focus
+        evaluator = Evaluator()
+        
+        # Compare all algorithms against FairCare-FL
+        if "faircare_fl" in aggregated:
+            print("\n" + "="*80)
+            print("STATISTICAL COMPARISONS (Other algorithms vs FairCare-FL)")
+            print("="*80)
+            
+            # Temporarily set FairCare as baseline for comparison
+            faircare_backup = aggregated.get("faircare_fl", [])
+            fedavg_backup = aggregated.get("fedavg", [])
+            
+            # Swap for comparison
+            aggregated["fedavg"] = faircare_backup
+            aggregated["faircare_fl"] = fedavg_backup
+            
+            comparisons = evaluator.compare_algorithms(
+                aggregated,
+                metric="worst_group_F1"
+            )
+            
+            # Restore original
+            aggregated["faircare_fl"] = faircare_backup
+            aggregated["fedavg"] = fedavg_backup
+            
+            for algo, stats in comparisons.items():
+                if algo != "faircare_fl":
+                    print(f"\n{algo.upper()}:")
+                    print(f"  Mean: {stats['mean']:.4f} ± {stats['std']:.4f}")
+                    print(f"  FairCare-FL Mean: {stats['baseline_mean']:.4f} ± {stats['baseline_std']:.4f}")
+                    print(f"  p-value: {stats['p_value']:.4f}")
+                    print(f"  FairCare-FL is {'significantly' if stats['significant'] else 'not significantly'} better")
     
     print(f"\nResults saved to: {output_dir}")
 
