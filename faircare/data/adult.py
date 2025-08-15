@@ -84,7 +84,7 @@ def load_adult(
         df = df.rename(columns={target_col: 'income'})
         
     except Exception as e:
-        warnings.warn(f"OpenML failed: {e}. Trying fallback...")
+        warnings.warn(f"OpenML failed: {e}. Using fallback...")
         
         # Fallback to UCI repository
         if cache_file.exists():
@@ -122,20 +122,22 @@ def load_adult(
     if 'income' in df.columns:
         income_col = df['income'].astype(str).str.strip()
         # Handle both '>50K' and '1' formats
-        if income_col.dtype == 'object' and any('>50K' in str(v) for v in income_col.unique()):
+        if any('>50K' in str(v) for v in income_col.unique()):
             y = (income_col == '>50K').astype(int).values
+        elif any('<=50K' in str(v) for v in income_col.unique()):
+            y = (income_col != '<=50K').astype(int).values
         else:
             # If it's already numeric or different format
-            y = pd.to_numeric(income_col, errors='coerce')
-            if y.isna().all():
+            y_numeric = pd.to_numeric(income_col, errors='coerce')
+            if not y_numeric.isna().all():
+                y = (y_numeric > 0).astype(int).values
+            else:
                 # If conversion failed, try to interpret as binary
                 unique_vals = income_col.unique()
                 if len(unique_vals) == 2:
                     y = (income_col == unique_vals[1]).astype(int).values
                 else:
                     y = (income_col == income_col.mode()[0]).astype(int).values
-            else:
-                y = (y > 0).astype(int).values
     else:
         # If no income column, use synthetic data
         warnings.warn("No income column found. Using synthetic data.")
@@ -148,7 +150,7 @@ def load_adult(
             seed=seed
         )
     
-    # Extract sensitive attribute
+    # Extract sensitive attribute BEFORE encoding
     if sensitive_attribute == "sex" and 'sex' in df.columns:
         sex_col = df['sex'].astype(str).str.strip()
         a = (sex_col == 'Male').astype(int).values
@@ -158,23 +160,25 @@ def load_adult(
     else:
         a = None
     
-    # Prepare features
-    categorical_columns = df.select_dtypes(include=['object']).columns.tolist()
-    if 'income' in categorical_columns:
-        categorical_columns.remove('income')
+    # Now encode ALL columns (except income which we already processed)
+    df_encoded = df.copy()
+    if 'income' in df_encoded.columns:
+        df_encoded = df_encoded.drop('income', axis=1)
+    
+    # Separate numeric and categorical columns
+    numeric_columns = df_encoded.select_dtypes(include=[np.number]).columns.tolist()
+    categorical_columns = df_encoded.select_dtypes(exclude=[np.number]).columns.tolist()
     
     # Encode categorical variables
-    df_encoded = df.copy()
     label_encoders = {}
-    
     for col in categorical_columns:
         le = LabelEncoder()
-        df_encoded[col] = le.fit_transform(df[col].astype(str))
+        # Convert to string first to handle any mixed types
+        df_encoded[col] = le.fit_transform(df_encoded[col].astype(str))
         label_encoders[col] = le
     
-    # Select features (exclude target)
-    feature_columns = [col for col in df_encoded.columns if col != 'income']
-    X = df_encoded[feature_columns].values
+    # Make sure all columns are numeric now
+    X = df_encoded.values.astype(float)
     
     # Standardize features
     scaler = StandardScaler()
