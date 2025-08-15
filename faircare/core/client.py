@@ -101,7 +101,18 @@ class Client:
                 
                 # Forward pass
                 optimizer.zero_grad()
-                outputs = self.model(X).squeeze()
+                outputs = self.model(X)
+                
+                # FIX: Handle shape properly for BCEWithLogitsLoss
+                # Ensure outputs and y have the same shape
+                if outputs.dim() > 1 and outputs.shape[1] == 1:
+                    outputs = outputs.squeeze(1)
+                elif outputs.dim() == 0:
+                    outputs = outputs.unsqueeze(0)
+                    
+                if y.dim() == 0:
+                    y = y.unsqueeze(0)
+                    
                 loss = criterion(outputs, y)
                 
                 # Add proximal term if using FedProx
@@ -141,7 +152,14 @@ class Client:
             
             self.model.eval()
             with torch.no_grad():
-                outputs = self.model(X_val).squeeze()
+                outputs = self.model(X_val)
+                
+                # FIX: Handle shape properly
+                if outputs.dim() > 1 and outputs.shape[1] == 1:
+                    outputs = outputs.squeeze(1)
+                elif outputs.dim() == 0:
+                    outputs = outputs.unsqueeze(0)
+                    
                 y_pred = (torch.sigmoid(outputs) > 0.5).int()
             
             # Compute fairness metrics
@@ -195,7 +213,17 @@ class Client:
                 X = X.to(self.device)
                 y = y.to(self.device).float()
                 
-                outputs = self.model(X).squeeze()
+                outputs = self.model(X)
+                
+                # FIX: Handle shape properly
+                if outputs.dim() > 1 and outputs.shape[1] == 1:
+                    outputs = outputs.squeeze(1)
+                elif outputs.dim() == 0:
+                    outputs = outputs.unsqueeze(0)
+                    
+                if y.dim() == 0:
+                    y = y.unsqueeze(0)
+                    
                 loss = criterion(outputs, y)
                 
                 total_loss += loss.item() * X.size(0)
