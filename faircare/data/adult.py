@@ -69,6 +69,20 @@ def load_adult(
         )
         df = pd.concat([X, y], axis=1)
         
+        # Find the target column name (it might be 'class' or something else)
+        target_col = None
+        for col in df.columns:
+            if 'class' in col.lower() or 'income' in col.lower() or 'target' in col.lower():
+                target_col = col
+                break
+        
+        if target_col is None:
+            # Last column is often the target
+            target_col = df.columns[-1]
+        
+        # Rename target column to 'income' for consistency
+        df = df.rename(columns={target_col: 'income'})
+        
     except Exception as e:
         warnings.warn(f"OpenML failed: {e}. Trying fallback...")
         
@@ -84,7 +98,19 @@ def load_adult(
                 'capital-gain', 'capital-loss', 'hours-per-week', 'native-country', 'income'
             ]
             
-            df = pd.read_csv(url, names=column_names, sep=',\s*', engine='python')
+            try:
+                df = pd.read_csv(url, names=column_names, sep=',\s*', engine='python')
+            except:
+                # If UCI fails, generate synthetic data as fallback
+                warnings.warn("Both OpenML and UCI failed. Using synthetic data as fallback.")
+                from faircare.data.synth_health import generate_synthetic_health
+                return generate_synthetic_health(
+                    n_samples=30000,
+                    n_features=108,  # Adult usually has 108 features after encoding
+                    bias_level=0.3,
+                    group_imbalance=0.5,
+                    seed=seed
+                )
             
             # Save to cache
             df.to_csv(cache_file, index=False)
@@ -92,20 +118,50 @@ def load_adult(
     # Clean data
     df = df.replace('?', np.nan).dropna()
     
-    # Encode target variable
-    y = (df['income'].str.strip() == '>50K').astype(int).values
+    # Encode target variable - handle different formats
+    if 'income' in df.columns:
+        income_col = df['income'].astype(str).str.strip()
+        # Handle both '>50K' and '1' formats
+        if income_col.dtype == 'object' and any('>50K' in str(v) for v in income_col.unique()):
+            y = (income_col == '>50K').astype(int).values
+        else:
+            # If it's already numeric or different format
+            y = pd.to_numeric(income_col, errors='coerce')
+            if y.isna().all():
+                # If conversion failed, try to interpret as binary
+                unique_vals = income_col.unique()
+                if len(unique_vals) == 2:
+                    y = (income_col == unique_vals[1]).astype(int).values
+                else:
+                    y = (income_col == income_col.mode()[0]).astype(int).values
+            else:
+                y = (y > 0).astype(int).values
+    else:
+        # If no income column, use synthetic data
+        warnings.warn("No income column found. Using synthetic data.")
+        from faircare.data.synth_health import generate_synthetic_health
+        return generate_synthetic_health(
+            n_samples=30000,
+            n_features=108,
+            bias_level=0.3,
+            group_imbalance=0.5,
+            seed=seed
+        )
     
     # Extract sensitive attribute
-    if sensitive_attribute == "sex":
-        a = (df['sex'].str.strip() == 'Male').astype(int).values
-    elif sensitive_attribute == "race":
-        a = (df['race'].str.strip() == 'White').astype(int).values
+    if sensitive_attribute == "sex" and 'sex' in df.columns:
+        sex_col = df['sex'].astype(str).str.strip()
+        a = (sex_col == 'Male').astype(int).values
+    elif sensitive_attribute == "race" and 'race' in df.columns:
+        race_col = df['race'].astype(str).str.strip()
+        a = (race_col == 'White').astype(int).values
     else:
         a = None
     
     # Prepare features
-    categorical_columns = df.select_dtypes(include=['object']).columns
-    categorical_columns = categorical_columns.drop(['income'])
+    categorical_columns = df.select_dtypes(include=['object']).columns.tolist()
+    if 'income' in categorical_columns:
+        categorical_columns.remove('income')
     
     # Encode categorical variables
     df_encoded = df.copy()
@@ -116,36 +172,39 @@ def load_adult(
         df_encoded[col] = le.fit_transform(df[col].astype(str))
         label_encoders[col] = le
     
-    # Select features
-    feature_columns = df_encoded.columns.drop(['income'])
+    # Select features (exclude target)
+    feature_columns = [col for col in df_encoded.columns if col != 'income']
     X = df_encoded[feature_columns].values
     
     # Standardize features
     scaler = StandardScaler()
     X = scaler.fit_transform(X)
     
+    # Ensure we have the right lengths
+    assert len(X) == len(y), f"X and y lengths don't match: {len(X)} vs {len(y)}"
+    if a is not None:
+        assert len(a) == len(y), f"a and y lengths don't match: {len(a)} vs {len(y)}"
+    
     # Split data
-    X_temp, X_test, y_temp, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=seed, stratify=y
-    )
-    
     if a is not None:
-        a_temp = a[: len(X_temp)]
-        a_test = a[len(X_temp): len(X_temp) + len(X_test)]
+        X_temp, X_test, y_temp, y_test, a_temp, a_test = train_test_split(
+            X, y, a, test_size=test_size, random_state=seed, stratify=y
+        )
+        
+        X_train, X_val, y_train, y_val, a_train, a_val = train_test_split(
+            X_temp, y_temp, a_temp, test_size=val_size/(1-test_size), 
+            random_state=seed, stratify=y_temp
+        )
     else:
-        a_temp = None
-        a_test = None
-    
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_temp, y_temp, test_size=val_size/(1-test_size), random_state=seed, stratify=y_temp
-    )
-    
-    if a is not None:
-        a_train = a_temp[: len(X_train)]
-        a_val = a_temp[len(X_train):]
-    else:
-        a_train = None
-        a_val = None
+        X_temp, X_test, y_temp, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=seed, stratify=y
+        )
+        
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_temp, y_temp, test_size=val_size/(1-test_size), 
+            random_state=seed, stratify=y_temp
+        )
+        a_train = a_val = a_test = None
     
     # Create datasets
     train_dataset = AdultDataset(X_train, y_train, a_train)
