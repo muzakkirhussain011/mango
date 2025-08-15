@@ -33,6 +33,12 @@ def run_experiment(config: ExperimentConfig) -> Dict[str, Any]:
         sensitive_attribute=config.data.sensitive_attribute
     )
     
+    # Update model input dimension based on actual dataset
+    actual_input_dim = dataset.get("n_features", config.model.input_dim)
+    if actual_input_dim != config.model.input_dim:
+        logger.info(f"Updating model input dimension from {config.model.input_dim} to {actual_input_dim}")
+        config.model.input_dim = actual_input_dim
+    
     # Create federated splits
     fed_data = make_federated_splits(
         dataset=dataset,
