@@ -1,8 +1,6 @@
-"""Main training orchestrator."""
+"""Main training orchestrator with FairCare-FL++ support."""
 from typing import Dict, Any, Optional, List
-
 import torch
-from typing import Dict, List, Optional, Tuple, Any, Union, Protocol
 from pathlib import Path
 import json
 
@@ -17,13 +15,14 @@ from faircare.core.evaluation import Evaluator
 
 
 def run_experiment(config: ExperimentConfig) -> Dict[str, Any]:
-    """Run a federated learning experiment."""
+    """Run a FairCare-FL++ federated learning experiment."""
     # Set seed
     set_seed(config.seed)
     
     # Setup logger
     logger = Logger(config.logdir, config.name)
-    logger.info(f"Starting experiment: {config.name}")
+    logger.info(f"Starting FairCare-FL++ experiment: {config.name}")
+    logger.info(f"Algorithm: {config.training.algo}")
     logger.log_config(config.to_dict())
     
     # Load data
@@ -59,6 +58,19 @@ def run_experiment(config: ExperimentConfig) -> Dict[str, Any]:
         dropout=config.model.dropout
     )
     
+    # Log FairCare-FL++ configuration
+    if config.training.algo == "faircare_fl":
+        logger.info("=" * 60)
+        logger.info("FairCare-FL++ Configuration:")
+        logger.info(f"  Fairness weights: α={config.fairness.alpha}, β={config.fairness.beta}, γ={config.fairness.gamma}")
+        logger.info(f"  Fairness penalty: λ={config.fairness.lambda_fair} (range: {config.fairness.lambda_min}-{config.fairness.lambda_max})")
+        logger.info(f"  Temperature: τ={config.fairness.tau} (min: {config.fairness.tau_min})")
+        logger.info(f"  Momentum: client={config.fairness.mu_client}, server={config.fairness.theta_server}")
+        logger.info(f"  Bias thresholds: EO={config.fairness.bias_threshold_eo}, FPR={config.fairness.bias_threshold_fpr}, SP={config.fairness.bias_threshold_sp}")
+        logger.info(f"  Bias detection: {config.fairness.enable_bias_detection}")
+        logger.info(f"  Multi-metric fairness: {config.fairness.enable_multi_metric}")
+        logger.info("=" * 60)
+    
     # Create clients
     clients = []
     for i in range(config.data.n_clients):
@@ -78,15 +90,15 @@ def run_experiment(config: ExperimentConfig) -> Dict[str, Any]:
         )
         clients.append(client)
     
-    # Create aggregator
+    # Create aggregator with full fairness configuration
     aggregator = make_aggregator(
         config.training.algo,
         n_clients=config.data.n_clients,
         fairness_config=config.fairness,
-        algo_config=config.algo
+        **config.algo.to_dict()
     )
     
-    # Create server
+    # Create server with enhanced functionality
     server = Server(
         model=model,
         clients=clients,
@@ -99,6 +111,7 @@ def run_experiment(config: ExperimentConfig) -> Dict[str, Any]:
     )
     
     # Run training
+    logger.info("Starting federated training...")
     history = server.run(
         rounds=config.training.rounds,
         n_clients_per_round=min(
@@ -121,6 +134,49 @@ def run_experiment(config: ExperimentConfig) -> Dict[str, Any]:
         prefix="final"
     )
     
+    # Log final performance
+    logger.info("=" * 60)
+    logger.info("FINAL PERFORMANCE:")
+    logger.info(f"  Accuracy: {final_metrics.get('final_accuracy', 0):.4f}")
+    logger.info(f"  Worst Group F1: {final_metrics.get('final_worst_group_F1', 0):.4f}")
+    logger.info(f"  EO Gap: {final_metrics.get('final_EO_gap', 0):.4f}")
+    logger.info(f"  FPR Gap: {final_metrics.get('final_FPR_gap', 0):.4f}")
+    logger.info(f"  SP Gap: {final_metrics.get('final_SP_gap', 0):.4f}")
+    logger.info(f"  Max Gap: {final_metrics.get('final_max_group_gap', 0):.4f}")
+    
+    # Check if FairCare-FL++ achieved targets
+    if config.training.algo == "faircare_fl":
+        logger.info("-" * 60)
+        logger.info("TARGET ACHIEVEMENT:")
+        
+        # Target: Better worst_group_F1 than qFFL (>0.46)
+        wgf1 = final_metrics.get('final_worst_group_F1', 0)
+        if wgf1 > 0.46:
+            logger.info(f"✓ Worst Group F1 ({wgf1:.4f}) > 0.46 target")
+        else:
+            logger.info(f"✗ Worst Group F1 ({wgf1:.4f}) < 0.46 target")
+        
+        # Target: Lower EO gap than baseline (<0.20)
+        eo_gap = final_metrics.get('final_EO_gap', 1)
+        if eo_gap < 0.20:
+            logger.info(f"✓ EO Gap ({eo_gap:.4f}) < 0.20 target")
+        else:
+            logger.info(f"✗ EO Gap ({eo_gap:.4f}) > 0.20 target")
+        
+        # Target: Maintain reasonable accuracy (>0.65)
+        acc = final_metrics.get('final_accuracy', 0)
+        if acc > 0.65:
+            logger.info(f"✓ Accuracy ({acc:.4f}) > 0.65 target")
+        else:
+            logger.info(f"✗ Accuracy ({acc:.4f}) < 0.65 target")
+    
+    logger.info("=" * 60)
+    
+    # Get aggregator statistics if available
+    if hasattr(server.aggregator, 'get_statistics'):
+        agg_stats = server.aggregator.get_statistics()
+        logger.info(f"Aggregator final statistics: {agg_stats}")
+    
     # Save results
     results = {
         "config": config.to_dict(),
@@ -128,11 +184,23 @@ def run_experiment(config: ExperimentConfig) -> Dict[str, Any]:
         "final_metrics": final_metrics
     }
     
+    # Add aggregator statistics to results
+    if hasattr(server.aggregator, 'get_statistics'):
+        results["aggregator_statistics"] = server.aggregator.get_statistics()
+    
+    # Add bias mitigation summary
+    if 'bias_mitigation_rounds' in history:
+        n_bias_rounds = sum(history['bias_mitigation_rounds'])
+        results["bias_mitigation_summary"] = {
+            "total_rounds_in_bias_mode": n_bias_rounds,
+            "percentage_rounds_in_bias_mode": n_bias_rounds / config.training.rounds * 100
+        }
+    
     results_path = Path(config.logdir) / "results.json"
     with open(results_path, "w") as f:
         json.dump(results, f, indent=2, default=str)
     
     logger.info("Experiment completed")
-    logger.info(f"Final metrics: {final_metrics}")
+    logger.info(f"Results saved to: {results_path}")
     
     return results
