@@ -63,7 +63,7 @@ def run_experiment(config: ExperimentConfig) -> Dict[str, Any]:
         logger.info("=" * 60)
         logger.info("FairCare-FL++ Configuration:")
         logger.info(f"  Fairness weights: α={config.fairness.alpha}, β={config.fairness.beta}, γ={config.fairness.gamma}")
-        logger.info(f"  Fairness penalty: λ={config.fairness.lambda_fair} (range: {config.fairness.lambda_min}-{config.fairness.lambda_max})")
+        logger.info(f"  Fairness penalty: λ={config.fairness.lambda_fair} (range: {config.fairness.lambda_fair_min}-{config.fairness.lambda_fair_max})")
         logger.info(f"  Temperature: τ={config.fairness.tau} (min: {config.fairness.tau_min})")
         logger.info(f"  Momentum: client={config.fairness.mu_client}, server={config.fairness.theta_server}")
         logger.info(f"  Bias thresholds: EO={config.fairness.bias_threshold_eo}, FPR={config.fairness.bias_threshold_fpr}, SP={config.fairness.bias_threshold_sp}")
