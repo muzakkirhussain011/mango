@@ -1,4 +1,4 @@
-# faircare/experiments/configs/comprehensive_test.yaml
+# FairCare-FL++ Comprehensive Test Configuration
 base:
   model:
     model_type: "mlp"
@@ -18,9 +18,36 @@ base:
     eval_every: 1
     lr: 0.05  # Higher learning rate for faster convergence
     device: "cpu"
+  fairness:
+    # FairCare-FL++ optimal parameters
+    alpha: 2.0  # EO gap weight
+    beta: 1.5   # FPR gap weight
+    gamma: 1.5  # SP gap weight
+    delta: 0.1  # Accuracy weight
+    tau: 1.0
+    tau_min: 0.1
+    tau_anneal: true
+    tau_anneal_rate: 0.95
+    mu_client: 0.9
+    theta_server: 0.8
+    lambda_fair: 0.5
+    lambda_min: 0.1
+    lambda_max: 2.0
+    lambda_adapt_rate: 1.2
+    bias_threshold_eo: 0.15
+    bias_threshold_fpr: 0.15
+    bias_threshold_sp: 0.2
+    epsilon: 0.01
+    weight_clip: 10.0
+    enable_bias_detection: true
+    enable_server_momentum: true
+    enable_multi_metric: true
+    variance_penalty: 0.2
+    improvement_bonus: 0.3
+    fairness_loss_type: "eo_sp_combined"
     
 param_grid:
-  # Test ALL algorithms
+  # Test ALL algorithms including enhanced FairCare-FL++
   training.algo: ["fedavg", "fedprox", "qffl", "afl", "fairfate", "faircare_fl"]
   
 seeds: [0, 1]  # 2 seeds for quick statistical validation
