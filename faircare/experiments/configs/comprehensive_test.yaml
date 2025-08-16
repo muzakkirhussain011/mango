@@ -31,8 +31,8 @@ base:
     mu_client: 0.9
     theta_server: 0.8
     lambda_fair: 0.5
-    lambda_min: 0.1
-    lambda_max: 2.0
+    lambda_fair_min: 0.1
+    lambda_fair_max: 2.0
     lambda_adapt_rate: 1.2
     bias_threshold_eo: 0.15
     bias_threshold_fpr: 0.15
