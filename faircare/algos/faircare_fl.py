@@ -35,12 +35,14 @@ class FairCareAggregator(BaseAggregator):
         tau_anneal_rate: float = 0.95,  # Annealing factor per round
         
         # Fairness penalty parameters
+        lambda_fair: float = 0.1,       # Current fairness penalty
         lambda_fair_init: float = 0.1,  # Initial fairness penalty
         lambda_fair_min: float = 0.01,  # Minimum lambda
         lambda_fair_max: float = 2.0,   # Maximum lambda
         lambda_adapt_rate: float = 1.2, # Lambda increase factor
         
         # Momentum parameters
+        mu: float = 0.9,                # Client-side momentum (legacy)
         mu_client: float = 0.9,         # Client score momentum
         theta_server: float = 0.8,      # Server update momentum
         
@@ -48,6 +50,9 @@ class FairCareAggregator(BaseAggregator):
         thr_eo: float = 0.15,           # EO gap threshold
         thr_fpr: float = 0.15,          # FPR gap threshold
         thr_sp: float = 0.10,           # SP gap threshold
+        bias_threshold_eo: float = 0.15,
+        bias_threshold_fpr: float = 0.15,
+        bias_threshold_sp: float = 0.10,
         
         # Fairness loss weights (for client training)
         w_eo: float = 1.0,              # EO loss weight
@@ -82,18 +87,20 @@ class FairCareAggregator(BaseAggregator):
         self.tau_min = tau_min
         self.tau_anneal_rate = tau_anneal_rate
         
-        self.lambda_fair = lambda_fair_init
+        self.lambda_fair = lambda_fair if lambda_fair > 0 else lambda_fair_init
         self.lambda_fair_init = lambda_fair_init
         self.lambda_fair_min = lambda_fair_min
         self.lambda_fair_max = lambda_fair_max
         self.lambda_adapt_rate = lambda_adapt_rate
         
-        self.mu_client = mu_client
+        # Handle both mu and mu_client
+        self.mu_client = mu_client if mu_client > 0 else mu
         self.theta_server = theta_server
         
-        self.thr_eo = thr_eo
-        self.thr_fpr = thr_fpr
-        self.thr_sp = thr_sp
+        # Use the bias_threshold_* versions if provided, otherwise use thr_*
+        self.thr_eo = thr_eo if bias_threshold_eo == 0.15 else bias_threshold_eo
+        self.thr_fpr = thr_fpr if bias_threshold_fpr == 0.15 else bias_threshold_fpr
+        self.thr_sp = thr_sp if bias_threshold_sp == 0.10 else bias_threshold_sp
         
         self.w_eo = w_eo
         self.w_fpr = w_fpr
@@ -198,7 +205,7 @@ class FairCareAggregator(BaseAggregator):
                 self.alpha * eo_score + 
                 self.beta * fpr_score + 
                 self.gamma * sp_score
-            ) / (self.alpha + self.beta + self.gamma)
+            ) / (self.alpha + self.beta + self.gamma + 1e-8)
             
             # Include worst-group F1 if available
             if "worst_group_F1" in summary:
@@ -341,20 +348,25 @@ class FairCareAggregator(BaseAggregator):
         # Convert scores to weights via softmax
         scores = torch.tensor(scores, dtype=torch.float32)
         
-        # Normalize scores for numerical stability
-        if scores.std() > 0:
-            scores_norm = (scores - scores.mean()) / (scores.std() + 1e-8)
+        # Handle edge case where all scores are identical
+        if len(scores) > 0 and torch.allclose(scores, scores[0]):
+            # Uniform weights if all scores are equal
+            weights = torch.ones_like(scores) / len(scores)
         else:
-            scores_norm = scores
-        
-        # Apply softmax with temperature
-        if self.tau > 0:
-            weights = torch.exp(scores_norm / self.tau)
-            weights = weights / weights.sum()
-        else:
-            # If tau is 0, assign all weight to best client
-            weights = torch.zeros_like(scores)
-            weights[torch.argmax(scores)] = 1.0
+            # Normalize scores for numerical stability
+            if scores.std() > 1e-8:
+                scores_norm = (scores - scores.mean()) / (scores.std() + 1e-8)
+            else:
+                scores_norm = scores
+            
+            # Apply softmax with temperature
+            if self.tau > 0:
+                weights = torch.exp(scores_norm / self.tau)
+                weights = weights / weights.sum()
+            else:
+                # If tau is 0, assign all weight to best client
+                weights = torch.zeros_like(scores)
+                weights[torch.argmax(scores)] = 1.0
         
         # Apply weight floor and clipping
         weights = self._postprocess(weights)
