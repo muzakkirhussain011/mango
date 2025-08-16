@@ -1,4 +1,4 @@
-"""FairCare-FL++: Next-generation fair federated learning algorithm."""
+"""FairCare-FL++: Next-generation fairness-aware federated learning algorithm."""
 from typing import List, Dict, Any, Optional
 import torch
 import numpy as np
@@ -6,125 +6,153 @@ from faircare.algos.aggregator import BaseAggregator, register_aggregator
 
 
 @register_aggregator("faircare_fl")
-class FairCarePlusPlusAggregator(BaseAggregator):
+class FairCareAggregator(BaseAggregator):
     """
-    FairCare-FL++: Dual-level fairness optimization with adaptive bias mitigation.
+    FairCare-FL++: Advanced fairness-aware aggregation with adaptive bias mitigation.
     
-    Key innovations:
-    1. Dual-level fairness optimization (local training + global aggregation)
-    2. Adaptive fairness weighting with bias detection
-    3. Fairness-aware momentum at both client and server levels
-    4. Multi-metric fairness support
-    5. Automatic bias mitigation mode
+    Key features:
+    1. Dual-level fairness optimization (client and server)
+    2. Adaptive bias detection and mitigation modes
+    3. Multi-metric fairness scoring with momentum
+    4. Dynamic parameter adjustment based on bias levels
     """
     
     def __init__(
         self,
         n_clients: int,
         # Fairness metric weights
-        alpha: float = 2.0,      # EO gap weight
-        beta: float = 1.5,       # FPR gap weight  
-        gamma: float = 1.5,      # SP gap weight
-        delta: float = 0.1,      # Accuracy weight
-        # Adaptive parameters
-        tau: float = 1.0,        # Initial temperature
-        tau_min: float = 0.1,    # Minimum temperature
-        tau_anneal_rate: float = 0.95,  # Temperature annealing rate
-        mu_client: float = 0.9,  # Client-side momentum
-        theta_server: float = 0.8,  # Server-side momentum
+        alpha: float = 1.0,          # EO gap weight
+        beta: float = 0.5,           # FPR gap weight  
+        gamma: float = 0.5,          # SP gap weight
+        delta: float = 0.2,          # Accuracy weight in score
+        delta_init: float = 0.2,     # Initial delta value
+        delta_min: float = 0.01,     # Minimum delta in bias mode
+        
+        # Temperature parameters
+        tau: float = 1.0,            # Temperature for softmax
+        tau_init: float = 1.0,       # Initial temperature
+        tau_min: float = 0.1,        # Minimum temperature
+        tau_anneal_rate: float = 0.95,  # Annealing factor per round
+        
+        # Fairness penalty parameters
+        lambda_fair_init: float = 0.1,  # Initial fairness penalty
+        lambda_fair_min: float = 0.01,  # Minimum lambda
+        lambda_fair_max: float = 2.0,   # Maximum lambda
+        lambda_adapt_rate: float = 1.2, # Lambda increase factor
+        
+        # Momentum parameters
+        mu_client: float = 0.9,         # Client score momentum
+        theta_server: float = 0.8,      # Server update momentum
+        
         # Bias detection thresholds
-        bias_threshold_eo: float = 0.15,  # EO gap threshold for bias mode
-        bias_threshold_fpr: float = 0.15,  # FPR gap threshold
-        bias_threshold_sp: float = 0.2,   # SP gap threshold
-        # Fairness penalty for local training
-        lambda_fair: float = 0.5,  # Initial fairness penalty weight
-        lambda_min: float = 0.1,   # Minimum lambda
-        lambda_max: float = 2.0,   # Maximum lambda
-        lambda_adapt_rate: float = 1.2,  # Lambda adjustment rate
-        # Weight constraints
-        epsilon: float = 0.01,   # Weight floor
-        weight_clip: float = 10.0,  # Weight ceiling multiplier
-        # Advanced features
-        enable_bias_detection: bool = True,
-        enable_server_momentum: bool = True,
-        enable_multi_metric: bool = True,
-        variance_penalty: float = 0.2,
-        improvement_bonus: float = 0.3,
-        fairness_metric: str = "composite",
+        thr_eo: float = 0.15,           # EO gap threshold
+        thr_fpr: float = 0.15,          # FPR gap threshold
+        thr_sp: float = 0.10,           # SP gap threshold
+        
+        # Fairness loss weights (for client training)
+        w_eo: float = 1.0,              # EO loss weight
+        w_fpr: float = 0.5,             # FPR loss weight
+        w_sp: float = 0.5,              # SP loss weight
+        
+        # Weight bounds
+        epsilon: float = 0.01,          # Weight floor
+        weight_clip: float = 10.0,      # Max weight multiplier
+        
+        # Score adjustments
+        improvement_bonus: float = 0.1,    # Bonus for improving clients
+        variance_penalty: float = 0.1,     # Penalty for unstable clients
+        participation_boost: float = 0.15,  # Boost for new/rare clients
+        
+        fairness_metric: str = "eo_gap",
         **kwargs
     ):
-        super().__init__(n_clients, epsilon=epsilon, weight_clip=weight_clip, fairness_metric=fairness_metric)
+        super().__init__(n_clients, epsilon=epsilon, weight_clip=weight_clip, 
+                        fairness_metric=fairness_metric)
         
-        # Core parameters
+        # Store all parameters
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
         self.delta = delta
+        self.delta_init = delta_init
+        self.delta_min = delta_min
         
-        # Temperature parameters
         self.tau = tau
-        self.tau_initial = tau
+        self.tau_init = tau_init
         self.tau_min = tau_min
         self.tau_anneal_rate = tau_anneal_rate
         
-        # Momentum parameters
+        self.lambda_fair = lambda_fair_init
+        self.lambda_fair_init = lambda_fair_init
+        self.lambda_fair_min = lambda_fair_min
+        self.lambda_fair_max = lambda_fair_max
+        self.lambda_adapt_rate = lambda_adapt_rate
+        
         self.mu_client = mu_client
         self.theta_server = theta_server
         
-        # Bias detection parameters
-        self.bias_threshold_eo = bias_threshold_eo
-        self.bias_threshold_fpr = bias_threshold_fpr
-        self.bias_threshold_sp = bias_threshold_sp
-        self.enable_bias_detection = enable_bias_detection
+        self.thr_eo = thr_eo
+        self.thr_fpr = thr_fpr
+        self.thr_sp = thr_sp
         
-        # Fairness penalty parameters
-        self.lambda_fair = lambda_fair
-        self.lambda_initial = lambda_fair
-        self.lambda_min = lambda_min
-        self.lambda_max = lambda_max
-        self.lambda_adapt_rate = lambda_adapt_rate
+        self.w_eo = w_eo
+        self.w_fpr = w_fpr
+        self.w_sp = w_sp
         
-        # Advanced features
-        self.enable_server_momentum = enable_server_momentum
-        self.enable_multi_metric = enable_multi_metric
-        self.variance_penalty = variance_penalty
         self.improvement_bonus = improvement_bonus
+        self.variance_penalty = variance_penalty
+        self.participation_boost = participation_boost
         
         # State tracking
         self.round_num = 0
         self.bias_mitigation_mode = False
         self.consecutive_bias_rounds = 0
-        self.server_momentum_buffer = None
+        self.prev_global_update = None
         
-        # Client history with enhanced tracking
+        # Client history tracking
         self.client_history = {}
         for i in range(n_clients):
             self.client_history[i] = {
-                'fairness_scores': [],
                 'smoothed_score': 0.5,
+                'fairness_scores': [],
+                'accuracy_scores': [],
                 'eo_gaps': [],
                 'fpr_gaps': [],
                 'sp_gaps': [],
-                'accuracies': [],
-                'weights': [],
                 'participation_count': 0,
+                'last_round': -1,
                 'improvement_trend': 0.0,
                 'stability_score': 1.0,
                 'last_update_quality': 0.5
             }
         
-        # Global metrics tracking
+        # Global metrics history
         self.global_metrics_history = {
-            'eo_gap': [],
-            'fpr_gap': [],
-            'sp_gap': [],
-            'accuracy': [],
-            'worst_group_f1': []
+            'avg_eo_gap': [],
+            'avg_fpr_gap': [],
+            'avg_sp_gap': [],
+            'bias_mode': [],
+            'lambda_fair': [],
+            'delta': [],
+            'tau': []
+        }
+    
+    def get_fairness_config(self) -> Dict[str, Any]:
+        """
+        Get current fairness configuration to send to clients.
+        """
+        return {
+            'lambda_fair': self.lambda_fair,
+            'bias_mitigation_mode': self.bias_mitigation_mode,
+            'w_eo': self.w_eo,
+            'w_fpr': self.w_fpr,
+            'w_sp': self.w_sp,
+            'round': self.round_num
         }
     
     def compute_weights(self, client_summaries: List[Dict[str, Any]]) -> torch.Tensor:
         """
-        Compute adaptive weights with bias detection and mitigation.
+        Compute FairCare-FL++ weights with adaptive bias mitigation.
         """
         self.round_num += 1
         n = len(client_summaries)
@@ -132,303 +160,238 @@ class FairCarePlusPlusAggregator(BaseAggregator):
         if n == 0:
             return torch.tensor([], dtype=torch.float32)
         
-        # Detect and respond to bias
-        if self.enable_bias_detection:
-            self._detect_and_respond_to_bias(client_summaries)
-        
-        # Adaptive temperature annealing
-        if self.round_num > 1:
-            if self.bias_mitigation_mode:
-                # Sharp temperature for aggressive bias mitigation
-                self.tau = max(self.tau_min, self.tau_initial * 0.5)
-            else:
-                # Normal annealing
-                self.tau = max(self.tau_min, self.tau * self.tau_anneal_rate)
+        # Collect metrics for bias detection
+        eo_gaps = []
+        fpr_gaps = []
+        sp_gaps = []
         
         scores = []
-        client_indices = []
-        
         for i, summary in enumerate(client_summaries):
             client_id = summary.get("client_id", i)
-            client_indices.append(client_id)
             
-            # Extract comprehensive metrics
-            metrics = self._extract_metrics(summary)
+            # Extract metrics
+            eo_gap = summary.get("eo_gap", summary.get("val_EO_gap", 0.5))
+            fpr_gap = summary.get("fpr_gap", summary.get("val_FPR_gap", 0.5))
+            sp_gap = summary.get("sp_gap", summary.get("val_SP_gap", 0.5))
+            
+            eo_gaps.append(eo_gap)
+            fpr_gaps.append(fpr_gap)
+            sp_gaps.append(abs(sp_gap))
+            
+            # Get accuracy
+            if "val_acc" in summary:
+                accuracy = summary["val_acc"]
+            elif "val_accuracy" in summary:
+                accuracy = summary["val_accuracy"]
+            elif "val_loss" in summary:
+                accuracy = 1.0 / (1.0 + summary["val_loss"])
+            else:
+                accuracy = 0.5
+            
+            # Compute fairness components (higher is better)
+            eo_score = 1.0 - min(eo_gap, 1.0) ** 0.5  # Square root for smoothing
+            fpr_score = 1.0 - min(fpr_gap, 1.0) ** 0.5
+            sp_score = 1.0 - min(abs(sp_gap), 1.0) ** 0.5
+            
+            # Weighted fairness score
+            fairness_component = (
+                self.alpha * eo_score + 
+                self.beta * fpr_score + 
+                self.gamma * sp_score
+            ) / (self.alpha + self.beta + self.gamma)
+            
+            # Include worst-group F1 if available
+            if "worst_group_F1" in summary:
+                wg_f1 = summary["worst_group_F1"]
+                fairness_component = 0.8 * fairness_component + 0.2 * wg_f1
+            
+            # Combine fairness and accuracy based on mode
+            if self.bias_mitigation_mode:
+                # In bias mode, heavily prioritize fairness
+                combined_score = 0.95 * fairness_component + 0.05 * accuracy
+            else:
+                # Normal mode: balance fairness and accuracy
+                combined_score = (1 - self.delta) * fairness_component + self.delta * accuracy
+            
+            # Apply client momentum
+            prev_score = self.client_history[client_id]['smoothed_score']
+            smoothed_score = self.mu_client * prev_score + (1 - self.mu_client) * combined_score
             
             # Update client history
-            self._update_client_history(client_id, metrics)
+            history = self.client_history[client_id]
+            history['smoothed_score'] = smoothed_score
+            history['fairness_scores'].append(fairness_component)
+            history['accuracy_scores'].append(accuracy)
+            history['eo_gaps'].append(eo_gap)
+            history['fpr_gaps'].append(fpr_gap)
+            history['sp_gaps'].append(sp_gap)
+            history['participation_count'] += 1
+            history['last_round'] = self.round_num
             
-            # Compute composite fairness score
-            if self.enable_multi_metric:
-                fairness_score = self._compute_multi_metric_score(metrics, client_id)
-            else:
-                fairness_score = self._compute_basic_fairness_score(metrics)
+            # Compute performance adjustments
+            final_score = smoothed_score
             
-            # Apply client-side momentum
-            if client_id in self.client_history:
-                hist = self.client_history[client_id]
-                smoothed_score = self.mu_client * hist['smoothed_score'] + (1 - self.mu_client) * fairness_score
-                hist['smoothed_score'] = smoothed_score
-                fairness_score = smoothed_score
+            # Improvement trend bonus
+            if len(history['fairness_scores']) >= 3:
+                recent = history['fairness_scores'][-3:]
+                if recent[-1] > recent[0]:  # Improving
+                    improvement = min(recent[-1] - recent[0], 1.0)
+                    history['improvement_trend'] = improvement
+                    final_score *= (1 + self.improvement_bonus * improvement)
             
-            # Apply performance-based adjustments
-            fairness_score = self._apply_performance_adjustments(fairness_score, client_id)
+            # Stability assessment
+            if len(history['eo_gaps']) >= 3:
+                recent_gaps = history['eo_gaps'][-3:]
+                variance = np.var(recent_gaps)
+                stability = 1.0 / (1.0 + variance * 10)  # Convert variance to stability
+                history['stability_score'] = stability
+                
+                if stability > 0.8:
+                    final_score *= 1.1  # Bonus for stable clients
+                elif stability < 0.3:
+                    final_score *= (1 - self.variance_penalty)  # Penalty for unstable
             
-            scores.append(fairness_score)
+            # Update quality assessment
+            history['last_update_quality'] = fairness_component
+            if fairness_component > 0.7:
+                final_score *= 1.2  # Bonus for high-quality updates
+            
+            # Participation incentive for new/rare clients
+            if history['participation_count'] <= 2:
+                final_score *= (1 + self.participation_boost)
+            
+            # Clip score to reasonable range
+            final_score = max(0.0, min(final_score, 2.0))
+            scores.append(final_score)
         
-        scores = torch.tensor(scores, dtype=torch.float32)
+        # Detect and respond to bias
+        avg_eo_gap = np.mean(eo_gaps) if eo_gaps else 0
+        avg_fpr_gap = np.mean(fpr_gaps) if fpr_gaps else 0
+        avg_sp_gap = np.mean(sp_gaps) if sp_gaps else 0
         
-        # Convert scores to weights using softmax with temperature
-        if self.tau > 0:
-            # Normalize scores for numerical stability
-            scores_normalized = (scores - scores.mean()) / (scores.std() + 1e-8)
-            exp_scores = torch.exp(scores_normalized / self.tau)
-            weights = exp_scores / exp_scores.sum()
-        else:
-            # Deterministic: best client gets all weight
-            weights = torch.zeros_like(scores)
-            weights[torch.argmax(scores)] = 1.0
-        
-        # Apply weight constraints
-        weights = self._postprocess(weights)
-        
-        # Store weights in history
-        for i, client_id in enumerate(client_indices):
-            if client_id in self.client_history:
-                self.client_history[client_id]['weights'].append(weights[i].item())
-        
-        # Update global metrics
-        self._update_global_metrics(client_summaries)
-        
-        return weights
-    
-    def _extract_metrics(self, summary: Dict[str, Any]) -> Dict[str, float]:
-        """Extract all relevant metrics from client summary."""
-        metrics = {}
-        
-        # Fairness gaps
-        metrics['eo_gap'] = summary.get('eo_gap', summary.get('val_EO_gap', 0.3))
-        metrics['fpr_gap'] = summary.get('fpr_gap', summary.get('val_FPR_gap', 0.3))
-        metrics['sp_gap'] = summary.get('sp_gap', summary.get('val_SP_gap', 0.3))
-        
-        # Performance metrics
-        metrics['accuracy'] = summary.get('val_acc', summary.get('val_accuracy', 0.5))
-        metrics['loss'] = summary.get('val_loss', summary.get('train_loss', 1.0))
-        
-        # Additional fairness metrics if available
-        metrics['worst_group_f1'] = summary.get('worst_group_F1', 0.5)
-        metrics['max_gap'] = summary.get('max_group_gap', max(metrics['eo_gap'], metrics['fpr_gap'], abs(metrics['sp_gap'])))
-        
-        return metrics
-    
-    def _update_client_history(self, client_id: int, metrics: Dict[str, float]):
-        """Update client history with new metrics."""
-        if client_id not in self.client_history:
-            return
-        
-        hist = self.client_history[client_id]
-        
-        # Store metrics
-        hist['eo_gaps'].append(metrics['eo_gap'])
-        hist['fpr_gaps'].append(metrics['fpr_gap'])
-        hist['sp_gaps'].append(metrics['sp_gap'])
-        hist['accuracies'].append(metrics['accuracy'])
-        hist['participation_count'] += 1
-        
-        # Calculate improvement trend
-        if len(hist['eo_gaps']) > 1:
-            recent_improvement = 0
-            for gap_list in [hist['eo_gaps'], hist['fpr_gaps'], hist['sp_gaps']]:
-                if len(gap_list) > 1:
-                    recent_improvement += (gap_list[-2] - gap_list[-1])
-            hist['improvement_trend'] = 0.7 * hist['improvement_trend'] + 0.3 * recent_improvement / 3
-        
-        # Calculate stability score
-        if len(hist['eo_gaps']) > 2:
-            recent_gaps = hist['eo_gaps'][-3:]
-            variance = np.var(recent_gaps)
-            hist['stability_score'] = 1.0 / (1.0 + 10 * variance)  # More sensitive to variance
-        
-        # Assess update quality
-        quality = (1 - metrics['eo_gap']) * (1 - metrics['fpr_gap']) * (1 - abs(metrics['sp_gap'])) * metrics['accuracy']
-        hist['last_update_quality'] = quality
-    
-    def _compute_multi_metric_score(self, metrics: Dict[str, float], client_id: int) -> float:
-        """Compute sophisticated multi-metric fairness score."""
-        # Non-linear transformation of gaps (square root for diminishing returns)
-        eo_score = 1.0 - np.sqrt(min(metrics['eo_gap'], 1.0))
-        fpr_score = 1.0 - np.sqrt(min(metrics['fpr_gap'], 1.0))
-        sp_score = 1.0 - np.sqrt(min(abs(metrics['sp_gap']), 1.0))
-        
-        # Weighted combination
-        fairness_component = (
-            self.alpha * eo_score +
-            self.beta * fpr_score +
-            self.gamma * sp_score
-        ) / (self.alpha + self.beta + self.gamma)
-        
-        # Include worst group F1 if available
-        if metrics['worst_group_f1'] > 0:
-            fairness_component = 0.8 * fairness_component + 0.2 * metrics['worst_group_f1']
-        
-        # Combine with accuracy
-        if self.bias_mitigation_mode:
-            # Heavily prioritize fairness in bias mitigation mode
-            combined_score = 0.95 * fairness_component + 0.05 * metrics['accuracy']
-        else:
-            combined_score = (1 - self.delta) * fairness_component + self.delta * metrics['accuracy']
-        
-        return min(max(combined_score, 0.0), 1.0)
-    
-    def _compute_basic_fairness_score(self, metrics: Dict[str, float]) -> float:
-        """Compute basic fairness score."""
-        fairness = (
-            self.alpha * (1 - metrics['eo_gap']) +
-            self.beta * (1 - metrics['fpr_gap']) +
-            self.gamma * (1 - abs(metrics['sp_gap']))
-        ) / (self.alpha + self.beta + self.gamma)
-        
-        return (1 - self.delta) * fairness + self.delta * metrics['accuracy']
-    
-    def _apply_performance_adjustments(self, score: float, client_id: int) -> float:
-        """Apply bonuses and penalties based on performance history."""
-        if client_id not in self.client_history:
-            return score
-        
-        hist = self.client_history[client_id]
-        
-        # Improvement bonus
-        if hist['improvement_trend'] > 0.01:
-            score *= (1.0 + self.improvement_bonus * min(hist['improvement_trend'], 1.0))
-        
-        # Stability bonus/penalty
-        if hist['stability_score'] > 0.8:
-            score *= 1.1  # Stable client bonus
-        elif hist['stability_score'] < 0.3:
-            score *= (1.0 - self.variance_penalty)  # Unstable client penalty
-        
-        # Quality bonus for consistently good updates
-        if hist['last_update_quality'] > 0.7:
-            score *= 1.2
-        
-        # Participation encouragement for new clients
-        if hist['participation_count'] <= 2:
-            score *= 1.15
-        
-        return min(max(score, 0.0), 2.0)
-    
-    def _detect_and_respond_to_bias(self, client_summaries: List[Dict[str, Any]]):
-        """Detect bias and adjust algorithm parameters."""
-        # Calculate average metrics across clients
-        avg_eo = np.mean([self._extract_metrics(s)['eo_gap'] for s in client_summaries])
-        avg_fpr = np.mean([self._extract_metrics(s)['fpr_gap'] for s in client_summaries])
-        avg_sp = np.mean([abs(self._extract_metrics(s)['sp_gap']) for s in client_summaries])
-        
-        # Check if bias exceeds thresholds
         bias_detected = (
-            avg_eo > self.bias_threshold_eo or
-            avg_fpr > self.bias_threshold_fpr or
-            avg_sp > self.bias_threshold_sp
+            avg_eo_gap > self.thr_eo or 
+            avg_fpr_gap > self.thr_fpr or 
+            avg_sp_gap > self.thr_sp
         )
         
         if bias_detected:
             if not self.bias_mitigation_mode:
                 # Enter bias mitigation mode
+                print(f"[Round {self.round_num}] Entering bias mitigation mode - "
+                      f"EO: {avg_eo_gap:.3f}, FPR: {avg_fpr_gap:.3f}, SP: {avg_sp_gap:.3f}")
                 self.bias_mitigation_mode = True
                 self.consecutive_bias_rounds = 1
                 
-                # Increase fairness penalty for local training
-                self.lambda_fair = min(self.lambda_max, self.lambda_fair * self.lambda_adapt_rate)
-                
-                # Adjust aggregator parameters for stronger fairness focus
-                self.delta = max(0.01, self.delta * 0.5)  # Reduce accuracy weight
-                
+                # Increase fairness penalty
+                self.lambda_fair = min(
+                    self.lambda_fair_max,
+                    self.lambda_fair * self.lambda_adapt_rate
+                )
+                # Drastically reduce accuracy weight
+                self.delta = max(self.delta_min, self.delta * 0.5)
+                # Use sharp temperature for focused aggregation
+                self.tau = self.tau_min
             else:
+                # Already in bias mode
                 self.consecutive_bias_rounds += 1
                 
-                # Further increase fairness penalty if bias persists
+                # Further increase lambda if bias persists
                 if self.consecutive_bias_rounds > 2:
-                    self.lambda_fair = min(self.lambda_max, self.lambda_fair * 1.1)
+                    self.lambda_fair = min(
+                        self.lambda_fair_max,
+                        self.lambda_fair * 1.1
+                    )
         else:
             if self.bias_mitigation_mode:
                 # Exit bias mitigation mode
+                print(f"[Round {self.round_num}] Exiting bias mitigation mode - "
+                      f"EO: {avg_eo_gap:.3f}, FPR: {avg_fpr_gap:.3f}, SP: {avg_sp_gap:.3f}")
                 self.bias_mitigation_mode = False
                 self.consecutive_bias_rounds = 0
                 
-                # Gradually relax fairness penalty
-                self.lambda_fair = max(self.lambda_min, self.lambda_fair * 0.9)
-                
-                # Restore balance between fairness and accuracy
-                self.delta = min(0.2, self.delta * 1.5)
-    
-    def _update_global_metrics(self, client_summaries: List[Dict[str, Any]]):
-        """Update global metrics history."""
-        if not client_summaries:
-            return
+                # Relax fairness penalty
+                self.lambda_fair = max(
+                    self.lambda_fair_min,
+                    self.lambda_fair * 0.9
+                )
+                # Restore some accuracy weight
+                self.delta = min(self.delta_init, self.delta * 1.5)
         
-        # Calculate average metrics
-        metrics = [self._extract_metrics(s) for s in client_summaries]
+        # Temperature annealing
+        if not self.bias_mitigation_mode:
+            # Normal annealing
+            self.tau = max(self.tau_min, self.tau * self.tau_anneal_rate)
         
-        self.global_metrics_history['eo_gap'].append(np.mean([m['eo_gap'] for m in metrics]))
-        self.global_metrics_history['fpr_gap'].append(np.mean([m['fpr_gap'] for m in metrics]))
-        self.global_metrics_history['sp_gap'].append(np.mean([abs(m['sp_gap']) for m in metrics]))
-        self.global_metrics_history['accuracy'].append(np.mean([m['accuracy'] for m in metrics]))
+        # Store global metrics
+        self.global_metrics_history['avg_eo_gap'].append(avg_eo_gap)
+        self.global_metrics_history['avg_fpr_gap'].append(avg_fpr_gap)
+        self.global_metrics_history['avg_sp_gap'].append(avg_sp_gap)
+        self.global_metrics_history['bias_mode'].append(self.bias_mitigation_mode)
+        self.global_metrics_history['lambda_fair'].append(self.lambda_fair)
+        self.global_metrics_history['delta'].append(self.delta)
+        self.global_metrics_history['tau'].append(self.tau)
         
-        if any('worst_group_f1' in m for m in metrics):
-            wgf1_values = [m['worst_group_f1'] for m in metrics if 'worst_group_f1' in m]
-            self.global_metrics_history['worst_group_f1'].append(np.mean(wgf1_values))
-    
-    def get_fairness_config(self) -> Dict[str, Any]:
-        """Get current fairness configuration for clients."""
-        return {
-            'lambda_fair': self.lambda_fair,
-            'bias_mitigation_mode': self.bias_mitigation_mode,
-            'round': self.round_num,
-            'target_metrics': {
-                'eo_gap': self.bias_threshold_eo,
-                'fpr_gap': self.bias_threshold_fpr,
-                'sp_gap': self.bias_threshold_sp
-            }
-        }
+        # Log current state
+        if self.round_num % 5 == 0 or bias_detected:
+            print(f"[Round {self.round_num}] λ_fair: {self.lambda_fair:.3f}, "
+                  f"δ: {self.delta:.3f}, τ: {self.tau:.3f}, "
+                  f"Bias Mode: {self.bias_mitigation_mode}")
+        
+        # Convert scores to weights via softmax
+        scores = torch.tensor(scores, dtype=torch.float32)
+        
+        # Normalize scores for numerical stability
+        if scores.std() > 0:
+            scores_norm = (scores - scores.mean()) / (scores.std() + 1e-8)
+        else:
+            scores_norm = scores
+        
+        # Apply softmax with temperature
+        if self.tau > 0:
+            weights = torch.exp(scores_norm / self.tau)
+            weights = weights / weights.sum()
+        else:
+            # If tau is 0, assign all weight to best client
+            weights = torch.zeros_like(scores)
+            weights[torch.argmax(scores)] = 1.0
+        
+        # Apply weight floor and clipping
+        weights = self._postprocess(weights)
+        
+        return weights
     
     def apply_server_momentum(self, update: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Apply server-side momentum to model updates."""
-        if not self.enable_server_momentum:
+        """
+        Apply server-side momentum to aggregated update.
+        """
+        if self.prev_global_update is None:
+            self.prev_global_update = update
             return update
         
-        if self.server_momentum_buffer is None:
-            self.server_momentum_buffer = update
-            return update
-        
-        # Apply momentum: new_update = θ * prev_update + (1-θ) * current_update
+        # Blend current with previous update
         momentum_update = {}
         for key in update.keys():
             momentum_update[key] = (
-                self.theta_server * self.server_momentum_buffer[key] +
+                self.theta_server * self.prev_global_update[key] +
                 (1 - self.theta_server) * update[key]
             )
         
-        self.server_momentum_buffer = momentum_update
+        self.prev_global_update = momentum_update
         return momentum_update
     
     def get_statistics(self) -> Dict[str, Any]:
-        """Get comprehensive statistics."""
+        """Get current algorithm statistics."""
         return {
             'round': self.round_num,
             'bias_mitigation_mode': self.bias_mitigation_mode,
-            'current_lambda': self.lambda_fair,
-            'current_tau': self.tau,
-            'global_metrics': {
-                k: v[-1] if v else None 
-                for k, v in self.global_metrics_history.items()
-            },
-            'client_stats': {
-                cid: {
-                    'participation': hist['participation_count'],
-                    'avg_weight': np.mean(hist['weights']) if hist['weights'] else 0,
-                    'improvement_trend': hist['improvement_trend'],
-                    'stability': hist['stability_score']
-                }
+            'lambda_fair': self.lambda_fair,
+            'delta': self.delta,
+            'tau': self.tau,
+            'consecutive_bias_rounds': self.consecutive_bias_rounds,
+            'global_metrics': self.global_metrics_history,
+            'client_participation': {
+                cid: hist['participation_count'] 
                 for cid, hist in self.client_history.items()
             }
         }
