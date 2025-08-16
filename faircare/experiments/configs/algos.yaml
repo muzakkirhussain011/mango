@@ -41,15 +41,47 @@ faircare_fl:
   training:
     algo: "faircare_fl"
   fairness:
-    alpha: 1.0
-    beta: 0.5
-    gamma: 0.5
-    delta: 0.1
+    # Fairness metric weights
+    alpha: 1.0           # EO gap weight
+    beta: 0.5            # FPR gap weight
+    gamma: 0.5           # SP gap weight
+    
+    # Score combination
+    delta: 0.2           # Accuracy weight
+    delta_init: 0.2
+    delta_min: 0.01
+    
+    # Temperature
     tau: 1.0
-    mu: 0.9
+    tau_init: 1.0
+    tau_min: 0.1
+    tau_anneal_rate: 0.95
+    
+    # Fairness penalty
+    lambda_fair_init: 0.1
+    lambda_fair_min: 0.01
+    lambda_fair_max: 2.0
+    lambda_adapt_rate: 1.2
+    
+    # Momentum
+    mu_client: 0.9
+    theta_server: 0.8
+    
+    # Bias detection thresholds
+    thr_eo: 0.15
+    thr_fpr: 0.15
+    thr_sp: 0.10
+    
+    # Client fairness loss weights
+    w_eo: 1.0
+    w_fpr: 0.5
+    w_sp: 0.5
+    
+    # Weight bounds
     epsilon: 0.01
-    tau_anneal: true
     weight_clip: 10.0
-  algo:
-    faircare_momentum: 0.9
-    faircare_anneal_rounds: 5
+    
+    # Score adjustments
+    improvement_bonus: 0.1
+    variance_penalty: 0.1
+    participation_boost: 0.15
