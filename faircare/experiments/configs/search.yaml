@@ -22,28 +22,42 @@ base:
 param_grid:
   training.algo: ["fedavg", "qffl", "afl", "fairfate", "faircare_fl"]
   training.lr: [0.01, 0.05, 0.1]
-  fairness.tau: [0.5, 1.0, 2.0]
-  fairness.alpha: [0.5, 1.0, 2.0]
+  # FairCare-FL++ specific parameters
+  fairness.lambda_fair_init: [0.05, 0.1, 0.2]
+  fairness.tau_init: [0.5, 1.0, 2.0]
+  fairness.delta_init: [0.1, 0.2, 0.3]
 
 seeds: [0, 1, 2, 3, 4]
 
-# Alternative: Random search
-# random_search:
-#   n_trials: 50
-#   distributions:
-#     training.lr:
-#       type: loguniform
-#       min: 0.001
-#       max: 0.1
-#     fairness.tau:
-#       type: uniform
-#       min: 0.1
-#       max: 5.0
-#     fairness.alpha:
-#       type: uniform
-#       min: 0.0
-#       max: 3.0
-#     algo.q:
-#       type: uniform
-#       min: 1.0
-#       max: 5.0
+# Alternative: Random search for FairCare-FL++ tuning
+random_search:
+  n_trials: 50
+  distributions:
+    training.lr:
+      type: loguniform
+      min: 0.001
+      max: 0.1
+    fairness.lambda_fair_init:
+      type: uniform
+      min: 0.01
+      max: 0.5
+    fairness.tau_init:
+      type: uniform
+      min: 0.1
+      max: 5.0
+    fairness.delta_init:
+      type: uniform
+      min: 0.0
+      max: 0.5
+    fairness.mu_client:
+      type: uniform
+      min: 0.7
+      max: 0.95
+    fairness.theta_server:
+      type: uniform
+      min: 0.6
+      max: 0.9
+    fairness.thr_eo:
+      type: uniform
+      min: 0.05
+      max: 0.25
