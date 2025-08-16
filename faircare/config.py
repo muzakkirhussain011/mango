@@ -51,13 +51,16 @@ class TrainingConfig:
 class FairnessConfig:
     """Enhanced fairness configuration for FairCare-FL++."""
     # Fairness metric weights
-    alpha: float = 2.0          # EO gap weight
-    beta: float = 1.5           # FPR gap weight
-    gamma: float = 1.5          # SP gap weight
-    delta: float = 0.1          # Accuracy weight
+    alpha: float = 1.0          # EO gap weight
+    beta: float = 0.5           # FPR gap weight
+    gamma: float = 0.5          # SP gap weight
+    delta: float = 0.2          # Accuracy weight
+    delta_init: float = 0.2     # Initial delta value
+    delta_min: float = 0.01     # Minimum delta in bias mode
     
     # Temperature parameters
     tau: float = 1.0            # Initial temperature
+    tau_init: float = 1.0       # Initial temperature (alias)
     tau_min: float = 0.1        # Minimum temperature
     tau_anneal: bool = True     # Enable temperature annealing
     tau_anneal_rate: float = 0.95  # Temperature annealing rate
@@ -68,15 +71,24 @@ class FairnessConfig:
     theta_server: float = 0.8   # Server-side momentum
     
     # Fairness penalty for local training
-    lambda_fair: float = 0.5    # Initial fairness penalty weight
-    lambda_min: float = 0.1     # Minimum lambda
-    lambda_max: float = 2.0     # Maximum lambda
+    lambda_fair: float = 0.1    # Current fairness penalty weight
+    lambda_fair_init: float = 0.1    # Initial fairness penalty weight
+    lambda_fair_min: float = 0.01     # Minimum lambda
+    lambda_fair_max: float = 2.0     # Maximum lambda
     lambda_adapt_rate: float = 1.2  # Lambda adjustment rate
     
     # Bias detection thresholds
     bias_threshold_eo: float = 0.15   # EO gap threshold
     bias_threshold_fpr: float = 0.15  # FPR gap threshold
-    bias_threshold_sp: float = 0.2    # SP gap threshold
+    bias_threshold_sp: float = 0.10    # SP gap threshold
+    thr_eo: float = 0.15           # EO gap threshold (alias)
+    thr_fpr: float = 0.15          # FPR gap threshold (alias)
+    thr_sp: float = 0.10           # SP gap threshold (alias)
+    
+    # Client fairness loss weights
+    w_eo: float = 1.0              # EO loss weight
+    w_fpr: float = 0.5             # FPR loss weight
+    w_sp: float = 0.5              # SP loss weight
     
     # Weight constraints
     epsilon: float = 0.01       # Weight floor
@@ -86,8 +98,9 @@ class FairnessConfig:
     enable_bias_detection: bool = True
     enable_server_momentum: bool = True
     enable_multi_metric: bool = True
-    variance_penalty: float = 0.2
-    improvement_bonus: float = 0.3
+    variance_penalty: float = 0.1
+    improvement_bonus: float = 0.1
+    participation_boost: float = 0.15
     fairness_loss_type: str = "eo_sp_combined"  # Type of fairness loss for local training
 
 
@@ -208,8 +221,8 @@ class ExperimentConfig:
         """Get fairness configuration to pass to clients."""
         return {
             'lambda_fair': self.fairness.lambda_fair,
-            'lambda_min': self.fairness.lambda_min,
-            'lambda_max': self.fairness.lambda_max,
+            'lambda_min': self.fairness.lambda_fair_min,
+            'lambda_max': self.fairness.lambda_fair_max,
             'fairness_loss_type': self.fairness.fairness_loss_type,
             'bias_thresholds': {
                 'eo': self.fairness.bias_threshold_eo,
