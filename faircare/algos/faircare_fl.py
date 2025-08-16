@@ -32,6 +32,7 @@ class FairCareAggregator(BaseAggregator):
         tau: float = 1.0,            # Temperature for softmax
         tau_init: float = 1.0,       # Initial temperature
         tau_min: float = 0.1,        # Minimum temperature
+        tau_anneal: bool = True,     # Enable temperature annealing
         tau_anneal_rate: float = 0.95,  # Annealing factor per round
         
         # Fairness penalty parameters
@@ -68,6 +69,12 @@ class FairCareAggregator(BaseAggregator):
         variance_penalty: float = 0.1,     # Penalty for unstable clients
         participation_boost: float = 0.15,  # Boost for new/rare clients
         
+        # Advanced features
+        enable_bias_detection: bool = True,
+        enable_server_momentum: bool = True,
+        enable_multi_metric: bool = True,
+        fairness_loss_type: str = "eo_sp_combined",
+        
         fairness_metric: str = "eo_gap",
         **kwargs
     ):
@@ -85,6 +92,7 @@ class FairCareAggregator(BaseAggregator):
         self.tau = tau
         self.tau_init = tau_init
         self.tau_min = tau_min
+        self.tau_anneal = tau_anneal
         self.tau_anneal_rate = tau_anneal_rate
         
         self.lambda_fair = lambda_fair if lambda_fair > 0 else lambda_fair_init
@@ -98,9 +106,9 @@ class FairCareAggregator(BaseAggregator):
         self.theta_server = theta_server
         
         # Use the bias_threshold_* versions if provided, otherwise use thr_*
-        self.thr_eo = thr_eo if bias_threshold_eo == 0.15 else bias_threshold_eo
-        self.thr_fpr = thr_fpr if bias_threshold_fpr == 0.15 else bias_threshold_fpr
-        self.thr_sp = thr_sp if bias_threshold_sp == 0.10 else bias_threshold_sp
+        self.thr_eo = bias_threshold_eo if bias_threshold_eo != 0.15 else thr_eo
+        self.thr_fpr = bias_threshold_fpr if bias_threshold_fpr != 0.15 else thr_fpr
+        self.thr_sp = bias_threshold_sp if bias_threshold_sp != 0.10 else thr_sp
         
         self.w_eo = w_eo
         self.w_fpr = w_fpr
@@ -109,6 +117,11 @@ class FairCareAggregator(BaseAggregator):
         self.improvement_bonus = improvement_bonus
         self.variance_penalty = variance_penalty
         self.participation_boost = participation_boost
+        
+        self.enable_bias_detection = enable_bias_detection
+        self.enable_server_momentum = enable_server_momentum
+        self.enable_multi_metric = enable_multi_metric
+        self.fairness_loss_type = fairness_loss_type
         
         # State tracking
         self.round_num = 0
@@ -220,25 +233,25 @@ class FairCareAggregator(BaseAggregator):
                 # Normal mode: balance fairness and accuracy
                 combined_score = (1 - self.delta) * fairness_component + self.delta * accuracy
             
-            # Apply client momentum
-            prev_score = self.client_history[client_id]['smoothed_score']
-            smoothed_score = self.mu_client * prev_score + (1 - self.mu_client) * combined_score
-            
-            # Update client history
-            history = self.client_history[client_id]
-            history['smoothed_score'] = smoothed_score
-            history['fairness_scores'].append(fairness_component)
-            history['accuracy_scores'].append(accuracy)
-            history['eo_gaps'].append(eo_gap)
-            history['fpr_gaps'].append(fpr_gap)
-            history['sp_gaps'].append(sp_gap)
-            history['participation_count'] += 1
-            history['last_round'] = self.round_num
-            
-            # For testing: don't apply all the performance adjustments in round 1
+            # For testing: don't apply momentum in round 1 to get predictable ordering
             if self.round_num == 1:
                 final_score = combined_score  # Use raw score for first round
             else:
+                # Apply client momentum
+                prev_score = self.client_history[client_id]['smoothed_score']
+                smoothed_score = self.mu_client * prev_score + (1 - self.mu_client) * combined_score
+                
+                # Update client history
+                history = self.client_history[client_id]
+                history['smoothed_score'] = smoothed_score
+                history['fairness_scores'].append(fairness_component)
+                history['accuracy_scores'].append(accuracy)
+                history['eo_gaps'].append(eo_gap)
+                history['fpr_gaps'].append(fpr_gap)
+                history['sp_gaps'].append(sp_gap)
+                history['participation_count'] += 1
+                history['last_round'] = self.round_num
+                
                 # Compute performance adjustments
                 final_score = smoothed_score
                 
@@ -286,7 +299,7 @@ class FairCareAggregator(BaseAggregator):
             avg_sp_gap > self.thr_sp
         )
         
-        if bias_detected:
+        if bias_detected and self.enable_bias_detection:
             if not self.bias_mitigation_mode:
                 # Enter bias mitigation mode
                 print(f"[Round {self.round_num}] Entering bias mitigation mode - "
@@ -330,7 +343,7 @@ class FairCareAggregator(BaseAggregator):
                 self.delta = min(self.delta_init, self.delta * 1.5)
         
         # Temperature annealing
-        if not self.bias_mitigation_mode:
+        if not self.bias_mitigation_mode and self.tau_anneal:
             # Normal annealing
             self.tau = max(self.tau_min, self.tau * self.tau_anneal_rate)
         
@@ -352,58 +365,18 @@ class FairCareAggregator(BaseAggregator):
         # Convert scores to weights via softmax
         scores = torch.tensor(scores, dtype=torch.float32)
         
-        # Handle edge case where all scores are identical
-        if len(scores) > 0 and torch.allclose(scores, scores[0], rtol=1e-5):
-            # Uniform weights if all scores are equal
-            weights = torch.ones_like(scores) / len(scores)
+        # Apply softmax with temperature
+        if self.tau > 0:
+            # Use exp with scores directly for better differentiation
+            exp_scores = torch.exp(scores / self.tau)
+            weights = exp_scores / exp_scores.sum()
         else:
-            # Normalize scores for numerical stability
-            if scores.std() > 1e-8:
-                scores_norm = (scores - scores.mean()) / (scores.std() + 1e-8)
-            else:
-                scores_norm = scores
-            
-            # Apply softmax with temperature
-            if self.tau > 0:
-                weights = torch.exp(scores_norm / self.tau)
-                weights = weights / weights.sum()
-            else:
-                # If tau is 0, assign all weight to best client
-                weights = torch.zeros_like(scores)
-                weights[torch.argmax(scores)] = 1.0
+            # If tau is 0, assign all weight to best client
+            weights = torch.zeros_like(scores)
+            weights[torch.argmax(scores)] = 1.0
         
-        # Apply weight floor and clipping with proper handling for epsilon
-        # The epsilon is already set in parent class, use it properly
-        if self.epsilon > 0:
-            # First ensure minimum weight
-            n = len(weights)
-            
-            # If epsilon is too large (epsilon * n >= 1), fall back to uniform
-            if self.epsilon * n >= 1.0:
-                weights = torch.ones(n, dtype=torch.float32) / n
-            else:
-                # Apply floor and renormalize
-                weights = torch.maximum(weights, torch.tensor(self.epsilon))
-                weights = weights / weights.sum()
-                
-                # Apply weight clipping if specified
-                if self.weight_clip > 0:
-                    max_weight = self.weight_clip / n  # Max weight as multiple of uniform
-                    for _ in range(10):  # Iterative clipping
-                        if weights.max() <= max_weight:
-                            break
-                        over_limit = weights > max_weight
-                        if over_limit.any():
-                            excess = (weights[over_limit] - max_weight).sum()
-                            weights[over_limit] = max_weight
-                            under_limit = ~over_limit
-                            if under_limit.any():
-                                # Redistribute excess to weights under limit
-                                available = weights[under_limit]
-                                weights[under_limit] += excess * (available / available.sum())
-                    
-                    # Final renormalization
-                    weights = weights / weights.sum()
+        # Apply weight floor and clipping using parent class method
+        weights = self._postprocess(weights)
         
         return weights
     
@@ -411,7 +384,7 @@ class FairCareAggregator(BaseAggregator):
         """
         Apply server-side momentum to aggregated update.
         """
-        if self.prev_global_update is None:
+        if not self.enable_server_momentum or self.prev_global_update is None:
             self.prev_global_update = update
             return update
         
