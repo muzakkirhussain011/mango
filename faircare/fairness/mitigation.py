@@ -1,6 +1,6 @@
 # faircare/fairness/mitigation.py
 """Bias mitigation policy module for FedBLE."""
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 import numpy as np
 
