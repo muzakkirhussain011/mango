@@ -223,7 +223,6 @@ class FedBLEAggregator(BaseAggregator):
             nn.Linear(16, 5),  # Output: weights for 5 components
             nn.Softmax(dim=-1)
         )
-    
     def _compute_component_weights(
         self,
         client_summaries: List[Dict[str, Any]]
@@ -263,13 +262,18 @@ class FedBLEAggregator(BaseAggregator):
             
             # Update AFL weights using exponential gradient
             if client_id < len(self.afl_client_weights):
-                self.afl_client_weights[client_id] *= torch.exp(self.afl_eta * loss)
+                # Fix: Convert to tensor before exp
+                loss_tensor = torch.tensor(self.afl_eta * loss, dtype=torch.float32)
+                self.afl_client_weights[client_id] *= torch.exp(loss_tensor)
         
         # Normalize and extract weights for selected clients
         self.afl_client_weights = self.afl_client_weights / self.afl_client_weights.sum()
         for i, summary in enumerate(client_summaries):
             client_id = summary.get("client_id", i)
-            afl_weights.append(self.afl_client_weights[client_id].item())
+            if client_id < len(self.afl_client_weights):
+                afl_weights.append(self.afl_client_weights[client_id].item())
+            else:
+                afl_weights.append(1.0 / len(client_summaries))
         afl_weights = torch.tensor(afl_weights, dtype=torch.float32)
         afl_weights = afl_weights / afl_weights.sum()
         
@@ -301,8 +305,7 @@ class FedBLEAggregator(BaseAggregator):
             qffl=qffl_weights,
             afl=afl_weights,
             fairfate=fairfate_weights
-        )
-    
+        )    
     def _compute_ensemble_weights(
         self,
         client_summaries: List[Dict[str, Any]],
