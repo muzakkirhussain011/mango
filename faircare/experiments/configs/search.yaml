@@ -1,4 +1,5 @@
-# Hyperparameter search configuration
+# faircare/experiments/configs/search.yaml
+# Hyperparameter search configuration including FedBLE
 
 base:
   model:
@@ -20,16 +21,25 @@ base:
     device: "cpu"
 
 param_grid:
-  training.algo: ["fedavg", "qffl", "afl", "fairfate", "faircare_fl"]
+  # Test all algorithms including FedBLE (faircare_fl)
+  training.algo: ["fedavg", "fedprox", "qffl", "afl", "fairfate", "faircare_fl"]
   training.lr: [0.01, 0.05, 0.1]
-  # FairCare-FL++ specific parameters
+  
+  # FedBLE specific parameters
+  fairness.gate_mode: ["heuristic", "learned"]
   fairness.lambda_fair_init: [0.05, 0.1, 0.2]
   fairness.tau_init: [0.5, 1.0, 2.0]
-  fairness.delta_init: [0.1, 0.2, 0.3]
+  # faircare/experiments/configs/search.yaml (continued)
+  fairness.delta_acc_init: [0.1, 0.2, 0.3]
+  fairness.qffl_q: [1.5, 2.0, 3.0]
+  fairness.prox_mu: [0.01, 0.05, 0.1]
+  fairness.w_eo: [0.5, 1.0, 1.5]
+  fairness.w_fpr: [0.3, 0.5, 0.7]
+  fairness.w_sp: [0.3, 0.5, 0.7]
 
 seeds: [0, 1, 2, 3, 4]
 
-# Alternative: Random search for FairCare-FL++ tuning
+# Alternative: Random search for FedBLE tuning
 random_search:
   n_trials: 50
   distributions:
@@ -45,19 +55,51 @@ random_search:
       type: uniform
       min: 0.1
       max: 5.0
-    fairness.delta_init:
+    fairness.delta_acc_init:
       type: uniform
       min: 0.0
       max: 0.5
-    fairness.mu_client:
+    fairness.ensemble_momentum:
       type: uniform
-      min: 0.7
+      min: 0.5
       max: 0.95
-    fairness.theta_server:
+    fairness.server_momentum:
       type: uniform
       min: 0.6
       max: 0.9
-    fairness.thr_eo:
+    fairness.qffl_q:
+      type: uniform
+      min: 1.0
+      max: 4.0
+    fairness.afl_eta:
+      type: loguniform
+      min: 0.001
+      max: 1.0
+    fairness.prox_mu:
+      type: loguniform
+      min: 0.001
+      max: 0.1
+    fairness.bias_threshold_eo:
       type: uniform
       min: 0.05
       max: 0.25
+    fairness.bias_threshold_fpr:
+      type: uniform
+      min: 0.05
+      max: 0.25
+    fairness.bias_threshold_sp:
+      type: uniform
+      min: 0.05
+      max: 0.20
+    fairness.adv_weight:
+      type: uniform
+      min: 0.01
+      max: 0.5
+    fairness.improvement_bonus:
+      type: uniform
+      min: 0.05
+      max: 0.3
+    fairness.variance_penalty:
+      type: uniform
+      min: 0.05
+      max: 0.3
