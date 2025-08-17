@@ -251,6 +251,7 @@ class TestFedBLE:
         assert output.shape == (batch_size, 2)
         
         # Test gradient reversal
+        x = torch.randn(batch_size, input_dim, requires_grad=True)  # Add requires_grad=True
         x_rev = gradient_reversal(x, alpha=1.0)
         assert x_rev.shape == x.shape
         
