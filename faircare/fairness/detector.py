@@ -116,18 +116,19 @@ class BiasDetector:
         triggered_metrics = []
         
         # Use hysteresis for state transitions
+        # Use hysteresis for state transitions
         if self.is_biased:
             # Currently biased: use lower thresholds to exit
             eo_threshold = self.thresholds['eo_gap'] - self.hysteresis
             fpr_threshold = self.thresholds['fpr_gap'] - self.hysteresis
             sp_threshold = self.thresholds['sp_gap'] - self.hysteresis
-            wgf1_threshold = self.thresholds['worst_group_f1_min'] + self.hysteresis
+            wgf1_threshold = self.thresholds.get('worst_group_f1_min', 0.6) + self.hysteresis
         else:
             # Not biased: use normal thresholds
             eo_threshold = self.thresholds['eo_gap']
             fpr_threshold = self.thresholds['fpr_gap']
             sp_threshold = self.thresholds['sp_gap']
-            wgf1_threshold = self.thresholds['worst_group_f1_min']
+            wgf1_threshold = self.thresholds.get('worst_group_f1_min', 0.6)
         
         # Check each metric
         if eo_gap > eo_threshold:
