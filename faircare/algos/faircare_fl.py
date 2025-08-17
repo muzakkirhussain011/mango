@@ -413,8 +413,16 @@ class FedBLEAggregator(BaseAggregator):
         
         # Get mixture coefficients from gate network
         features_batch = torch.stack(features_list)
-        with torch.no_grad():
+        
+        # Forward pass WITHOUT no_grad for training
+        if self.round_num > 5:  # Start training after some rounds
             mix_coeffs = self.gate_network(features_batch).mean(dim=0)
+            # Train gate network with meta-objective
+            self._train_gate_network(client_summaries, mix_coeffs)
+        else:
+            # Use without gradients in early rounds
+            with torch.no_grad():
+                mix_coeffs = self.gate_network(features_batch).mean(dim=0)
         
         # Compute weighted combination
         final_weights = (
@@ -425,14 +433,10 @@ class FedBLEAggregator(BaseAggregator):
             mix_coeffs[4] * component_weights.fairfate
         )
         
-        # Train gate network with meta-objective (reward worst-group F1, penalize gaps)
-        if self.round_num > 5:  # Start training after some rounds
-            self._train_gate_network(client_summaries, mix_coeffs)
-        
-        self.last_mixture_coeffs = mix_coeffs
+        self.last_mixture_coeffs = mix_coeffs.detach()  # Detach for logging
         
         return final_weights
-    
+
     def _train_gate_network(
         self,
         client_summaries: List[Dict[str, Any]],
@@ -450,12 +454,14 @@ class FedBLEAggregator(BaseAggregator):
         # Meta-objective: maximize worst F1, minimize gaps
         reward = worst_f1 - 0.5 * avg_eo_gap - 0.3 * avg_fpr_gap
         
-        # Simple policy gradient update
-        loss = -reward * predicted_mixture.sum()  # Negative for gradient ascent
-        
-        self.gate_optimizer.zero_grad()
-        loss.backward()
-        self.gate_optimizer.step()
+        # Only backward if the tensor requires grad
+        if predicted_mixture.requires_grad:
+            # Simple policy gradient update
+            loss = -reward * predicted_mixture.sum()  # Negative for gradient ascent
+            
+            self.gate_optimizer.zero_grad()
+            loss.backward()
+            self.gate_optimizer.step()
     
     def compute_weights(self, client_summaries: List[Dict[str, Any]]) -> torch.Tensor:
         """
@@ -549,7 +555,7 @@ class FedBLEAggregator(BaseAggregator):
             # Increase fairness pressure
             self.lambda_fair = min(
                 self.lambda_fair_max,
-                self.lambda_fair * self.lambda_adapt_rate
+                max(self.lambda_fair, self.lambda_fair_init) * self.lambda_adapt_rate  # Ensure at least lambda_fair_init
             )
             
             # Reduce accuracy weight
@@ -565,11 +571,16 @@ class FedBLEAggregator(BaseAggregator):
             if self.consecutive_bias_rounds > 3:
                 self.use_adversary = True
         else:
-            # Relax fairness pressure
-            self.lambda_fair = max(
-                self.lambda_fair_min,
-                self.lambda_fair * 0.9
-            )
+            # Relax fairness pressure but never below lambda_fair_init when recently in bias mode
+            if self.consecutive_bias_rounds > 0 or self.round_num <= 5:
+                # Keep at initial level early or after recent bias
+                self.lambda_fair = self.lambda_fair_init
+            else:
+                # Can relax after extended period without bias
+                self.lambda_fair = max(
+                    self.lambda_fair_min,
+                    self.lambda_fair * 0.95  # Slower relaxation
+                )
             
             # Restore accuracy weight
             self.delta_acc = min(
@@ -589,7 +600,7 @@ class FedBLEAggregator(BaseAggregator):
         self.global_metrics_history['lambda_fair'].append(self.lambda_fair)
         self.global_metrics_history['delta_acc'].append(self.delta_acc)
         self.global_metrics_history['tau'].append(self.tau)
-    
+
     def _apply_fairness_adjustments(
         self,
         weights: torch.Tensor,
