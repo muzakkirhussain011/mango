@@ -1,5 +1,4 @@
-# faircare/experiments/configs/algos.yaml
-# Algorithm-specific configurations including FedBLE
+# Algorithm-specific configurations including enhanced FairCare-FL v2
 
 fedavg:
   training:
@@ -38,21 +37,28 @@ fairfate:
     tau: 1.0
     epsilon: 0.01
 
-# FedBLE (uses faircare_fl name)
+# FairCare-FL v2.0 with Pareto optimization and CALT
 faircare_fl:
+  version: "2.0.0"
   training:
     algo: "faircare_fl"
+  
+  # Client-side CALT parameters
   fairness:
-    # Ensemble configuration
-    gate_mode: "heuristic"  # or "learned"
-    ensemble_momentum: 0.7
-    
-    # Component algorithm parameters
+    # Component algorithm parameters (legacy)
     qffl_q: 2.0
     qffl_eps: 0.0001
     afl_eta: 0.1
     afl_smoothing: 0.01
+    
+    # FedProx
     prox_mu: 0.01
+    
+    # IRM and adversarial training
+    lambda_irm: 0.5
+    lambda_adv: 0.2
+    use_mixup: true
+    use_cia: true
     
     # Fairness metric weights
     alpha: 1.0           # EO gap weight
@@ -69,17 +75,6 @@ faircare_fl:
     tau_anneal: true
     tau_anneal_rate: 0.95
     
-    # Fairness penalty
-    lambda_fair: 0.1
-    lambda_fair_init: 0.1
-    lambda_fair_min: 0.01
-    lambda_fair_max: 2.0
-    lambda_adapt_rate: 1.2
-    
-    # Adversarial debiasing
-    use_adversary: false
-    adv_weight: 0.1
-    
     # Server momentum
     server_momentum: 0.8
     
@@ -87,29 +82,53 @@ faircare_fl:
     bias_threshold_eo: 0.15
     bias_threshold_fpr: 0.15
     bias_threshold_sp: 0.10
-    detector_patience: 2
-    hysteresis: 0.02
-    
-    # Client fairness loss weights
-    w_eo: 1.0
-    w_fpr: 0.5
-    w_sp: 0.5
     
     # Weight bounds
     epsilon: 0.01
     weight_clip: 10.0
-    weight_capx: 5.0
     
-    # Score adjustments
-    improvement_bonus: 0.1
-    variance_penalty: 0.1
-    participation_boost: 0.15
+  # Pareto-Fair Aggregation (new)
+  algo:
+    mgda:
+      normalize_grads: true
+      solver: "qp"
+      step_size: 1.0
+    pcgrad:
+      enabled: true
+    cagrad:
+      enabled: true
+      rho: 0.5
     
-    # Extra training
-    extra_epoch_bias_mode: true
+    # Fairness duals (optional hard constraints)
+    fairness_duals:
+      enabled: false
+      epsilon_eo: 0.02
+      epsilon_fpr: 0.02
+      lr: 0.1
     
-    # DP/SA support (if enabled in config)
-    enable_dp: false
-    dp_epsilon: 1.0
-    dp_delta: 1e-5
-    enable_secure_agg: false
+    # Demographics-free bias discovery
+    arl:
+      enabled: true
+      eta: 1.0
+      width: 64
+      depth: 1
+    
+    # Fair client selection
+    selector:
+      enabled: true
+      mode: "lyapunov"
+      tau: 0.02
+      kappa: 0.5
+    
+    # Knowledge distillation
+    distill:
+      enabled: false
+      temperature: 2.0
+      steps: 200
+      batch_size: 64
+    
+    # Privacy (reuse repo settings)
+    dp:
+      enabled: false
+      clip: 1.0
+      noise_mult: 0.6

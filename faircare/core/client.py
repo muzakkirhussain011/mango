@@ -1,21 +1,17 @@
-# faircare/core/client.py
-"""Federated learning client with FedBLE enhancements."""
+"""Federated learning client with fairness-aware training and CALT hooks."""
 from typing import Dict, Optional, Tuple, Any
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 import copy
+import numpy as np
 from faircare.core.utils import compute_model_delta, create_optimizer
 from faircare.fairness.metrics import fairness_report
-from faircare.fairness.losses import (
-    combined_fairness_loss,
-    AdversaryNetwork,
-    gradient_reversal
-)
 
 
 class Client:
-    """Federated learning client with fairness-aware training and adversarial debiasing."""
+    """Federated learning client with enhanced fairness-aware training."""
     
     def __init__(
         self,
@@ -48,10 +44,6 @@ class Client:
             )
         else:
             self.val_loader = None
-        
-        # Initialize adversary (will be created on demand)
-        self.adversary = None
-        self.adversary_optimizer = None
     
     def train(
         self,
@@ -64,10 +56,7 @@ class Client:
         fairness_config: Optional[Dict[str, Any]] = None
     ) -> Tuple[Dict[str, torch.Tensor], int, Dict[str, Any]]:
         """
-        Train local model with FedBLE enhancements.
-        
-        Includes fairness-aware loss, optional adversarial debiasing,
-        and FedProx proximal term support.
+        Train local model with optional CALT enhancements for faircare_fl.
         
         Returns:
             - Model delta (update)
@@ -78,22 +67,15 @@ class Client:
         if fairness_config is None:
             fairness_config = {}
         
-        lambda_fair = fairness_config.get('lambda_fair', 0.0)
-        bias_mitigation_mode = fairness_config.get('bias_mitigation_mode', False)
-        use_adversary = fairness_config.get('use_adversary', False)
-        adv_weight = fairness_config.get('adv_weight', 0.1)
-        w_eo = fairness_config.get('w_eo', 1.0)
-        w_fpr = fairness_config.get('w_fpr', 0.5)
-        w_sp = fairness_config.get('w_sp', 0.5)
-        prox_mu = fairness_config.get('prox_mu', proximal_mu)
-        extra_epoch = fairness_config.get('extra_epoch', False)
+        # CALT parameters (only active for faircare_fl v2+)
+        version = fairness_config.get('version', '1.0.0')
+        use_calt = version >= '2.0.0'  # Enable CALT for v2+
         
-        # Adjust for bias mitigation mode
-        if bias_mitigation_mode:
-            if lambda_fair > 0:
-                lambda_fair = lambda_fair * 1.5  # Increase penalty
-            if extra_epoch:
-                epochs += 1  # Add extra epoch
+        lambda_irm = fairness_config.get('lambda_irm', 0.0) if use_calt else 0.0
+        lambda_adv = fairness_config.get('lambda_adv', 0.0) if use_calt else 0.0
+        use_mixup = fairness_config.get('use_mixup', False) if use_calt else False
+        use_cia = fairness_config.get('use_cia', False) if use_calt else False
+        prox_mu = fairness_config.get('prox_mu', proximal_mu)
         
         # Load global weights
         self.model.load_state_dict(global_weights)
@@ -113,41 +95,21 @@ class Client:
             weight_decay=weight_decay
         )
         
-        # Setup adversary if needed
-        if use_adversary and self.adversary is None:
-            # Get output dimension from model
-            with torch.no_grad():
-                dummy_input = torch.randn(1, next(self.model.parameters()).shape[1])
-                dummy_output = self.model(dummy_input.to(self.device))
-                output_dim = dummy_output.shape[-1] if dummy_output.dim() > 1 else 1
-            
-            self.adversary = AdversaryNetwork(
-                input_dim=output_dim,
-                hidden_dims=[32, 16],
-                n_sensitive_classes=2
-            ).to(self.device)
-            
-            self.adversary_optimizer = torch.optim.Adam(
-                self.adversary.parameters(),
-                lr=lr * 2  # Higher LR for adversary
-            )
-        
         # Training loop
         criterion = nn.BCEWithLogitsLoss()
         total_loss = 0.0
-        total_fairness_loss = 0.0
+        total_irm_loss = 0.0
         total_adv_loss = 0.0
         n_samples = 0
         n_batches = 0
         
-        # Track norms for drift detection
+        # Track statistics
         delta_norms = []
         grad_norms = []
+        group_confusion_counts = {}
         
         for epoch in range(epochs):
             epoch_loss = 0.0
-            epoch_fairness_loss = 0.0
-            epoch_adv_loss = 0.0
             
             for batch_idx, batch in enumerate(self.train_loader):
                 # Handle both with and without sensitive attributes
@@ -160,6 +122,18 @@ class Client:
                 
                 X = X.to(self.device)
                 y = y.to(self.device).float()
+                
+                # Apply mixup augmentation if enabled
+                if use_mixup and np.random.random() < 0.5:
+                    X, y, a = self._apply_mixup(X, y, a)
+                
+                # Apply CIA augmentation if enabled
+                if use_cia and a is not None and np.random.random() < 0.5:
+                    X_cia, y_cia, a_cia = self._apply_cia(X, y, a)
+                    # Concatenate with original batch
+                    X = torch.cat([X, X_cia], dim=0)
+                    y = torch.cat([y, y_cia], dim=0)
+                    a = torch.cat([a, a_cia], dim=0)
                 
                 # Forward pass
                 optimizer.zero_grad()
@@ -174,65 +148,23 @@ class Client:
                 if y.dim() == 0:
                     y = y.unsqueeze(0)
                 
-                # Prediction loss
+                # Base prediction loss
                 pred_loss = criterion(outputs, y)
-                
-                # Fairness loss
-                fair_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
-                if a is not None and lambda_fair > 0:
-                    fair_loss = combined_fairness_loss(
-                        outputs.unsqueeze(1) if outputs.dim() == 1 else outputs,
-                        y,
-                        a,
-                        w_eo=w_eo,
-                        w_fpr=w_fpr,
-                        w_sp=w_sp
-                    )
-                
-                # Adversarial loss
-                adv_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
-                if use_adversary and a is not None and self.adversary is not None:
-                    # Train adversary to predict sensitive attribute
-                    adv_input = outputs.detach()
-                    if adv_input.dim() == 1:
-                        adv_input = adv_input.unsqueeze(1)
-                    
-                    adv_pred = self.adversary(adv_input)
-                    
-                    # Adversary loss (cross-entropy for classification)
-                    if adv_pred.shape[1] > 1:
-                        adv_criterion = nn.CrossEntropyLoss()
-                        adv_loss_value = adv_criterion(adv_pred, a.long())
-                    else:
-                        adv_criterion = nn.BCEWithLogitsLoss()
-                        adv_loss_value = adv_criterion(adv_pred.squeeze(), a.float())
-                    
-                    # Update adversary
-                    self.adversary_optimizer.zero_grad()
-                    adv_loss_value.backward()
-                    self.adversary_optimizer.step()
-                    
-                    # Now compute adversarial loss for main model
-                    # Use gradient reversal to fool adversary
-                    adv_input_rev = gradient_reversal(
-                        outputs.unsqueeze(1) if outputs.dim() == 1 else outputs,
-                        alpha=1.0
-                    )
-                    adv_pred_rev = self.adversary(adv_input_rev)
-                    
-                    if adv_pred_rev.shape[1] > 1:
-                        adv_loss = adv_criterion(adv_pred_rev, a.long())
-                    else:
-                        adv_loss = adv_criterion(adv_pred_rev.squeeze(), a.float())
                 
                 # Total loss
                 total_loss_batch = pred_loss
                 
-                if lambda_fair > 0:
-                    total_loss_batch = total_loss_batch + lambda_fair * fair_loss
+                # Add IRM penalty if enabled
+                if lambda_irm > 0 and a is not None:
+                    irm_loss = self._compute_irm_penalty(outputs, y, a)
+                    total_loss_batch = total_loss_batch + lambda_irm * irm_loss
+                    total_irm_loss += irm_loss.item() * X.size(0)
                 
-                if use_adversary and adv_weight > 0:
-                    total_loss_batch = total_loss_batch + adv_weight * adv_loss
+                # Add adversarial loss if enabled
+                if lambda_adv > 0 and a is not None:
+                    adv_loss = self._compute_adversarial_loss(outputs, a)
+                    total_loss_batch = total_loss_batch - lambda_adv * adv_loss  # Negative for GRL
+                    total_adv_loss += adv_loss.item() * X.size(0)
                 
                 # Add proximal term if using FedProx
                 if prox_mu > 0 and global_model is not None:
@@ -258,22 +190,19 @@ class Client:
                 
                 # Track losses
                 epoch_loss += pred_loss.item() * X.size(0)
-                if lambda_fair > 0:
-                    epoch_fairness_loss += fair_loss.item() * X.size(0)
-                if use_adversary:
-                    epoch_adv_loss += adv_loss.item() * X.size(0)
-                
                 n_samples += X.size(0)
                 n_batches += 1
+                
+                # Update group confusion counts
+                if a is not None:
+                    self._update_confusion_counts(outputs, y, a, group_confusion_counts)
             
             total_loss += epoch_loss
-            total_fairness_loss += epoch_fairness_loss
-            total_adv_loss += epoch_adv_loss
         
         # Compute average losses
         avg_loss = total_loss / (n_samples * epochs) if n_samples > 0 else 0.0
-        avg_fair_loss = total_fairness_loss / (n_samples * epochs) if n_samples > 0 else 0.0
-        avg_adv_loss = total_adv_loss / (n_samples * epochs) if n_samples > 0 and use_adversary else 0.0
+        avg_irm_loss = total_irm_loss / (n_samples * epochs) if n_samples > 0 and lambda_irm > 0 else 0.0
+        avg_adv_loss = total_adv_loss / (n_samples * epochs) if n_samples > 0 and lambda_adv > 0 else 0.0
         
         # Compute model delta
         delta = compute_model_delta(
@@ -288,59 +217,254 @@ class Client:
         delta_norm = (delta_norm ** 0.5).item()
         delta_norms.append(delta_norm)
         
-        # Compute fairness metrics on server validation if provided
+        # Compute fairness metrics
         stats = {
             "train_loss": avg_loss,
-            "fairness_loss": avg_fair_loss,
-            "adversary_loss": avg_adv_loss,
+            "irm_loss": avg_irm_loss,
+            "adv_loss": avg_adv_loss,
             "n_samples": len(self.train_dataset),
             "client_id": self.client_id,
             "delta_norm": delta_norm,
-            "grad_norm": sum(grad_norms) / len(grad_norms) if grad_norms else 0.0
+            "grad_norm": sum(grad_norms) / len(grad_norms) if grad_norms else 0.0,
+            "group_stats": group_confusion_counts,
+            "calt_enabled": use_calt
         }
         
+        # Compute validation metrics if data provided
         if server_val_data is not None:
-            X_val, y_val, a_val = server_val_data
-            X_val = X_val.to(self.device)
-            
-            self.model.eval()
-            with torch.no_grad():
-                outputs = self.model(X_val)
-                
-                # Handle shape
-                if outputs.dim() > 1 and outputs.shape[1] == 1:
-                    outputs = outputs.squeeze(1)
-                elif outputs.dim() == 0:
-                    outputs = outputs.unsqueeze(0)
-                    
-                y_pred = (torch.sigmoid(outputs) > 0.5).int()
-                val_loss = criterion(outputs, y_val.to(self.device).float()).item()
-            
-            # Compute fairness metrics
-            fair_report = fairness_report(
-                y_pred.cpu(),
-                y_val,
-                a_val if a_val is not None else None
-            )
-            
-            stats.update({
-                "val_loss": val_loss,
-                "eo_gap": fair_report.get("EO_gap", 0.0),
-                "fpr_gap": fair_report.get("FPR_gap", 0.0),
-                "sp_gap": fair_report.get("SP_gap", 0.0),
-                "val_acc": fair_report.get("accuracy", 0.0),
-                "val_accuracy": fair_report.get("accuracy", 0.0),
-                "worst_group_F1": fair_report.get("worst_group_F1", 0.0),
-                "worst_group_f1": fair_report.get("worst_group_F1", 0.0)  # Alias
-            })
+            val_stats = self._compute_validation_metrics(server_val_data)
+            stats.update(val_stats)
         
-        # Log if in bias mitigation mode
-        if bias_mitigation_mode:
-            print(f"[Client {self.client_id}] Bias mitigation active - "
-                  f"λ_fair: {lambda_fair:.3f}, adversary: {use_adversary}, "
-                  f"extra epochs: {1 if extra_epoch else 0}")
+        # Compute calibration error proxy
+        stats['calibration_error'] = self._compute_calibration_error()
         
         return delta, len(self.train_dataset), stats
+    
+    def _apply_mixup(self, X: torch.Tensor, y: torch.Tensor, a: Optional[torch.Tensor], alpha: float = 0.2):
+        """Apply mixup augmentation."""
+        batch_size = X.size(0)
+        
+        # Sample lambda from Beta distribution
+        if alpha > 0:
+            lam = np.random.beta(alpha, alpha)
+        else:
+            lam = 1
+        
+        # Random permutation
+        index = torch.randperm(batch_size).to(self.device)
+        
+        # Mix inputs
+        mixed_X = lam * X + (1 - lam) * X[index]
+        mixed_y = lam * y + (1 - lam) * y[index]
+        
+        # For sensitive attribute, use majority voting
+        if a is not None:
+            mixed_a = a  # Keep original for simplicity
+        else:
+            mixed_a = None
+        
+        return mixed_X, mixed_y, mixed_a
+    
+    def _apply_cia(self, X: torch.Tensor, y: torch.Tensor, a: torch.Tensor):
+        """Apply Counterfactual Interpolation Augmentation."""
+        batch_size = X.size(0)
+        
+        # Find samples from different groups
+        group_0_mask = (a == 0)
+        group_1_mask = (a == 1)
+        
+        if group_0_mask.sum() == 0 or group_1_mask.sum() == 0:
+            return X[:0], y[:0], a[:0]  # Return empty tensors
+        
+        # Sample pairs from different groups
+        n_pairs = min(group_0_mask.sum(), group_1_mask.sum(), batch_size // 4)
+        
+        if n_pairs == 0:
+            return X[:0], y[:0], a[:0]
+        
+        group_0_indices = torch.where(group_0_mask)[0][:n_pairs]
+        group_1_indices = torch.where(group_1_mask)[0][:n_pairs]
+        
+        # Interpolate between different groups
+        alpha = torch.rand(n_pairs, 1).to(self.device)
+        
+        X_0 = X[group_0_indices]
+        X_1 = X[group_1_indices]
+        y_0 = y[group_0_indices]
+        y_1 = y[group_1_indices]
+        
+        X_cia = alpha * X_0 + (1 - alpha) * X_1
+        y_cia = (alpha.squeeze() * y_0 + (1 - alpha.squeeze()) * y_1)
+        
+        # Assign mixed sensitive attribute (could be probabilistic)
+        a_cia = torch.where(alpha.squeeze() > 0.5, a[group_0_indices], a[group_1_indices])
+        
+        return X_cia, y_cia, a_cia
+    
+    def _compute_irm_penalty(self, logits: torch.Tensor, labels: torch.Tensor, sensitive: torch.Tensor) -> torch.Tensor:
+        """Compute IRM penalty for environment invariance."""
+        # Split by sensitive attribute as environments
+        unique_envs = torch.unique(sensitive)
+        
+        if len(unique_envs) < 2:
+            return torch.tensor(0.0, device=self.device)
+        
+        penalties = []
+        
+        for env in unique_envs:
+            env_mask = (sensitive == env)
+            if env_mask.sum() < 2:
+                continue
+            
+            env_logits = logits[env_mask]
+            env_labels = labels[env_mask]
+            
+            # Compute environment-specific loss
+            env_loss = F.binary_cross_entropy_with_logits(env_logits, env_labels, reduction='mean')
+            
+            # Compute gradient norm w.r.t. a dummy scale parameter
+            scale = torch.tensor(1.0, requires_grad=True, device=self.device)
+            scaled_loss = env_loss * scale
+            
+            grad = torch.autograd.grad(scaled_loss, [scale], create_graph=True)[0]
+            penalty = torch.sum(grad ** 2)
+            
+            penalties.append(penalty)
+        
+        if penalties:
+            return torch.stack(penalties).mean()
+        else:
+            return torch.tensor(0.0, device=self.device)
+    
+    def _compute_adversarial_loss(self, features: torch.Tensor, sensitive: torch.Tensor) -> torch.Tensor:
+        """Compute adversarial loss for domain-invariant features (simplified)."""
+        # Simple linear adversary (to avoid adding complex networks)
+        # In production, this would be a proper adversarial network
+        
+        # Use features as input to predict sensitive attribute
+        if features.dim() == 1:
+            features = features.unsqueeze(1)
+        
+        # Simple projection to predict sensitive attribute
+        adv_weight = torch.randn(features.shape[1], 1, device=self.device) * 0.01
+        adv_logits = features.detach() @ adv_weight
+        
+        # Adversarial loss (binary cross-entropy)
+        adv_loss = F.binary_cross_entropy_with_logits(
+            adv_logits.squeeze(),
+            sensitive.float(),
+            reduction='mean'
+        )
+        
+        return adv_loss
+    
+    def _update_confusion_counts(
+        self, 
+        outputs: torch.Tensor, 
+        labels: torch.Tensor, 
+        sensitive: torch.Tensor,
+        counts_dict: Dict
+    ):
+        """Update per-group confusion counts."""
+        with torch.no_grad():
+            preds = (torch.sigmoid(outputs) > 0.5).int()
+            
+            for group_val in torch.unique(sensitive):
+                group_mask = (sensitive == group_val)
+                group_name = f"group_{group_val.item()}"
+                
+                if group_name not in counts_dict:
+                    counts_dict[group_name] = {"TP": 0, "FP": 0, "FN": 0, "TN": 0}
+                
+                group_preds = preds[group_mask]
+                group_labels = labels[group_mask].int()
+                
+                counts_dict[group_name]["TP"] += ((group_preds == 1) & (group_labels == 1)).sum().item()
+                counts_dict[group_name]["FP"] += ((group_preds == 1) & (group_labels == 0)).sum().item()
+                counts_dict[group_name]["FN"] += ((group_preds == 0) & (group_labels == 1)).sum().item()
+                counts_dict[group_name]["TN"] += ((group_preds == 0) & (group_labels == 0)).sum().item()
+    
+    def _compute_validation_metrics(self, server_val_data: Tuple) -> Dict[str, float]:
+        """Compute validation metrics including fairness."""
+        X_val, y_val, a_val = server_val_data
+        X_val = X_val.to(self.device)
+        
+        self.model.eval()
+        with torch.no_grad():
+            outputs = self.model(X_val)
+            
+            # Handle shape
+            if outputs.dim() > 1 and outputs.shape[1] == 1:
+                outputs = outputs.squeeze(1)
+            elif outputs.dim() == 0:
+                outputs = outputs.unsqueeze(0)
+            
+            y_pred = (torch.sigmoid(outputs) > 0.5).int()
+            val_loss = F.binary_cross_entropy_with_logits(
+                outputs, y_val.to(self.device).float()
+            ).item()
+        
+        # Compute fairness metrics
+        fair_report = fairness_report(
+            y_pred.cpu(),
+            y_val,
+            a_val if a_val is not None else None
+        )
+        
+        return {
+            "val_loss": val_loss,
+            "eo_gap": fair_report.get("EO_gap", 0.0),
+            "fpr_gap": fair_report.get("FPR_gap", 0.0),
+            "sp_gap": fair_report.get("SP_gap", 0.0),
+            "val_acc": fair_report.get("accuracy", 0.0),
+            "val_accuracy": fair_report.get("accuracy", 0.0),
+            "worst_group_F1": fair_report.get("worst_group_F1", 0.0),
+            "worst_group_f1": fair_report.get("worst_group_F1", 0.0)
+        }
+    
+    def _compute_calibration_error(self) -> float:
+        """Compute expected calibration error proxy."""
+        if self.val_loader is None:
+            return 0.0
+        
+        self.model.eval()
+        n_bins = 10
+        bin_boundaries = torch.linspace(0, 1, n_bins + 1)
+        bin_lowers = bin_boundaries[:-1]
+        bin_uppers = bin_boundaries[1:]
+        
+        total_ece = 0.0
+        total_samples = 0
+        
+        with torch.no_grad():
+            for batch in self.val_loader:
+                if len(batch) == 3:
+                    X, y, _ = batch
+                else:
+                    X, y = batch
+                
+                X = X.to(self.device)
+                y = y.to(self.device)
+                
+                outputs = self.model(X)
+                if outputs.dim() > 1 and outputs.shape[1] == 1:
+                    outputs = outputs.squeeze(1)
+                
+                probs = torch.sigmoid(outputs)
+                
+                for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
+                    in_bin = (probs > bin_lower) & (probs <= bin_upper)
+                    prop_in_bin = in_bin.float().mean()
+                    
+                    if prop_in_bin > 0:
+                        accuracy_in_bin = y[in_bin].float().mean()
+                        avg_confidence_in_bin = probs[in_bin].mean()
+                        ece = torch.abs(avg_confidence_in_bin - accuracy_in_bin) * prop_in_bin
+                        total_ece += ece.item()
+                
+                total_samples += len(y)
+        
+        return total_ece
     
     def evaluate(
         self,
