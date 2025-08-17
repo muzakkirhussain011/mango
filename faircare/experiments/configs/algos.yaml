@@ -1,4 +1,5 @@
-# Algorithm-specific configurations
+# faircare/experiments/configs/algos.yaml
+# Algorithm-specific configurations including FedBLE
 
 fedavg:
   training:
@@ -37,40 +38,57 @@ fairfate:
     tau: 1.0
     epsilon: 0.01
 
+# FedBLE (uses faircare_fl name)
 faircare_fl:
   training:
     algo: "faircare_fl"
   fairness:
+    # Ensemble configuration
+    gate_mode: "heuristic"  # or "learned"
+    ensemble_momentum: 0.7
+    
+    # Component algorithm parameters
+    qffl_q: 2.0
+    qffl_eps: 0.0001
+    afl_eta: 0.1
+    afl_smoothing: 0.01
+    prox_mu: 0.01
+    
     # Fairness metric weights
     alpha: 1.0           # EO gap weight
-    beta: 0.5            # FPR gap weight
+    beta: 0.5            # FPR gap weight  
     gamma: 0.5           # SP gap weight
-    
-    # Score combination
-    delta: 0.2           # Accuracy weight
-    delta_init: 0.2
-    delta_min: 0.01
+    delta_acc: 0.2       # Accuracy weight
+    delta_acc_init: 0.2
+    delta_acc_min: 0.01
     
     # Temperature
     tau: 1.0
     tau_init: 1.0
     tau_min: 0.1
+    tau_anneal: true
     tau_anneal_rate: 0.95
     
     # Fairness penalty
+    lambda_fair: 0.1
     lambda_fair_init: 0.1
     lambda_fair_min: 0.01
     lambda_fair_max: 2.0
     lambda_adapt_rate: 1.2
     
-    # Momentum
-    mu_client: 0.9
-    theta_server: 0.8
+    # Adversarial debiasing
+    use_adversary: false
+    adv_weight: 0.1
+    
+    # Server momentum
+    server_momentum: 0.8
     
     # Bias detection thresholds
-    thr_eo: 0.15
-    thr_fpr: 0.15
-    thr_sp: 0.10
+    bias_threshold_eo: 0.15
+    bias_threshold_fpr: 0.15
+    bias_threshold_sp: 0.10
+    detector_patience: 2
+    hysteresis: 0.02
     
     # Client fairness loss weights
     w_eo: 1.0
@@ -80,8 +98,18 @@ faircare_fl:
     # Weight bounds
     epsilon: 0.01
     weight_clip: 10.0
+    weight_capx: 5.0
     
     # Score adjustments
     improvement_bonus: 0.1
     variance_penalty: 0.1
     participation_boost: 0.15
+    
+    # Extra training
+    extra_epoch_bias_mode: true
+    
+    # DP/SA support (if enabled in config)
+    enable_dp: false
+    dp_epsilon: 1.0
+    dp_delta: 1e-5
+    enable_secure_agg: false
