@@ -1,4 +1,5 @@
-# Algorithm-specific configurations including enhanced FairCare-FL v2
+# faircare/experiments/configs/algos.yaml
+# Algorithm-specific configurations including FairCare-FL v2.0
 
 fedavg:
   training:
@@ -37,98 +38,77 @@ fairfate:
     tau: 1.0
     epsilon: 0.01
 
-# FairCare-FL v2.0 with Pareto optimization and CALT
+# FairCare-FL v2.0 with PFA + DFBD + CALT
 faircare_fl:
-  version: "2.0.0"
   training:
     algo: "faircare_fl"
-  
-  # Client-side CALT parameters
   fairness:
-    # Component algorithm parameters (legacy)
-    qffl_q: 2.0
-    qffl_eps: 0.0001
-    afl_eta: 0.1
-    afl_smoothing: 0.01
+    version: "2.0.0"
     
-    # FedProx
-    prox_mu: 0.01
-    
-    # IRM and adversarial training
+    # Client-side CALT parameters
+    prox_mu: 0.0
     lambda_irm: 0.5
     lambda_adv: 0.2
     use_mixup: true
     use_cia: true
     
-    # Fairness metric weights
-    alpha: 1.0           # EO gap weight
-    beta: 0.5            # FPR gap weight  
-    gamma: 0.5           # SP gap weight
-    delta_acc: 0.2       # Accuracy weight
-    delta_acc_init: 0.2
-    delta_acc_min: 0.01
+    # Server-side PFA parameters
+    server_momentum: 0.8
+    mgda_normalize_grads: true
+    mgda_solver: "qp"
+    mgda_step_size: 1.0
+    pcgrad_enabled: true
+    cagrad_enabled: true
+    cagrad_rho: 0.5
     
-    # Temperature
+    # Fairness dual ascent (optional constraints)
+    fairness_duals_enabled: true
+    epsilon_eo: 0.02
+    epsilon_fpr: 0.02
+    epsilon_sp: 0.02
+    dual_lr: 0.1
+    
+    # Demographics-free bias discovery (DFBD)
+    arl_enabled: true
+    arl_eta: 1.0
+    arl_width: 64
+    arl_depth: 1
+    
+    # Fairness-aware client selection
+    selector_enabled: true
+    selector_mode: "lyapunov"
+    selector_tau: 0.02
+    selector_kappa: 0.5
+    
+    # Optional distillation
+    distill_enabled: false
+    distill_temperature: 2.0
+    distill_steps: 200
+    distill_batch_size: 64
+    
+    # Privacy settings (reuse repo toggles)
+    dp_enabled: false
+    dp_clip: 1.0
+    dp_noise_mult: 0.6
+    
+    # Legacy/compatibility parameters
+    gate_mode: "learned"
+    lambda_fair: 0.1
+    lambda_fair_init: 0.1
+    lambda_fair_min: 0.01
+    lambda_fair_max: 2.0
     tau: 1.0
     tau_init: 1.0
     tau_min: 0.1
-    tau_anneal: true
-    tau_anneal_rate: 0.95
+    delta_acc: 0.2
+    delta_acc_init: 0.2
+    delta_acc_min: 0.01
     
-    # Server momentum
-    server_momentum: 0.8
-    
-    # Bias detection thresholds
-    bias_threshold_eo: 0.15
-    bias_threshold_fpr: 0.15
-    bias_threshold_sp: 0.10
-    
-    # Weight bounds
+    # Weight constraints
     epsilon: 0.01
     weight_clip: 10.0
     
-  # Pareto-Fair Aggregation (new)
-  algo:
-    mgda:
-      normalize_grads: true
-      solver: "qp"
-      step_size: 1.0
-    pcgrad:
-      enabled: true
-    cagrad:
-      enabled: true
-      rho: 0.5
-    
-    # Fairness duals (optional hard constraints)
-    fairness_duals:
-      enabled: false
-      epsilon_eo: 0.02
-      epsilon_fpr: 0.02
-      lr: 0.1
-    
-    # Demographics-free bias discovery
-    arl:
-      enabled: true
-      eta: 1.0
-      width: 64
-      depth: 1
-    
-    # Fair client selection
-    selector:
-      enabled: true
-      mode: "lyapunov"
-      tau: 0.02
-      kappa: 0.5
-    
-    # Knowledge distillation
-    distill:
-      enabled: false
-      temperature: 2.0
-      steps: 200
-      batch_size: 64
-    
-    # Privacy (reuse repo settings)
-    dp:
-      enabled: false
-      clip: 1.0
-      noise_mult: 0.6
+    # Fairness metric weights (for legacy compatibility)
+    alpha: 1.0           # EO gap weight
+    beta: 0.5            # FPR gap weight  
+    gamma: 0.5           # SP gap weight
