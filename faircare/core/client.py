@@ -78,7 +78,7 @@ class Client:
         if fairness_config is None:
             fairness_config = {}
         
-        # Check if CALT is enabled (only for faircare_fl)
+        # Check if CALT is enabled (only for faircare_fl v2.0)
         calt_enabled = fairness_config.get('version', '1.0') == '2.0.0'
         
         # CALT parameters
@@ -272,6 +272,7 @@ class Client:
             "train_loss": avg_loss,
             "irm_loss": avg_irm_loss,
             "adv_loss": avg_adv_loss,
+            "adversary_loss": avg_adv_loss,  # Alias for test compatibility
             "fairness_loss": avg_fairness_loss,  # For test compatibility
             "n_samples": len(self.train_dataset),
             "client_id": self.client_id,
