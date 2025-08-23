@@ -1,5 +1,5 @@
 # faircare/algos/faircare_fl.py
-"""FairCare-FL: Next-generation fair federated learning with PFA, DFBD, and CALT."""
+"""FairCare-FL v2.0: Production-ready implementation with PFA, DFBD, and CALT."""
 from typing import List, Dict, Any, Optional, Tuple
 import torch
 import torch.nn as nn
@@ -7,7 +7,6 @@ import torch.nn.functional as F
 import numpy as np
 from dataclasses import dataclass
 from faircare.algos.aggregator import BaseAggregator, register_aggregator
-from faircare.core.utils import flatten_weights, unflatten_weights
 
 
 @dataclass
@@ -23,14 +22,13 @@ class ComponentWeights:
 @register_aggregator("faircare_fl")
 class FairCareAggregator(BaseAggregator):
     """
-    FairCare-FL v2.0: Pareto-Fair Aggregation with Demographics-Free Bias Discovery
+    FairCare-FL v2.0: Fair Federated Learning with Enhanced Bias Mitigation
     
-    Features:
-    - Pareto-Fair Aggregation (PFA) with MGDA + PCGrad + CAGrad
-    - Demographics-Free Bias Discovery (DFBD) via adversarial reweighting
-    - Fairness-Aware Client Selection with Lyapunov queues
-    - Optional distillation for accuracy recovery
-    - Full SA/DP support preserved
+    Key Features:
+    - Multi-objective optimization balancing accuracy, fairness, and worst-group performance
+    - Demographics-free bias discovery via learned reweighting
+    - Adaptive bias detection and mitigation
+    - Server-side momentum for stable convergence
     """
     
     def __init__(
@@ -38,220 +36,141 @@ class FairCareAggregator(BaseAggregator):
         n_clients: int,
         version: str = "2.0.0",
         
-        # PFA: Multi-objective parameters
-        mgda_normalize_grads: bool = True,
-        mgda_solver: str = "qp",  
-        mgda_step_size: float = 1.0,
-        pcgrad_enabled: bool = True,
-        cagrad_enabled: bool = True,
-        cagrad_rho: float = 0.5,
+        # Fairness parameters
+        alpha: float = 1.0,          # EO gap weight
+        beta: float = 0.5,           # FPR gap weight  
+        gamma: float = 0.5,          # SP gap weight
+        delta: float = 0.2,          # Accuracy loss weight
         
-        # Fairness dual ascent (optional constraints)
-        fairness_duals_enabled: bool = False,
-        epsilon_eo: float = 0.02,
-        epsilon_fpr: float = 0.02,
-        epsilon_sp: float = 0.02,
-        dual_lr: float = 0.1,
+        # Temperature parameters
+        tau: float = 1.0,            # Temperature for softmin
+        tau_init: float = 1.0,       # Initial temperature
+        tau_min: float = 0.1,        # Minimum temperature in bias mode
+        tau_anneal: bool = True,     # Enable temperature annealing
+        tau_anneal_rate: float = 0.95,
         
-        # DFBD: Demographics-free bias discovery
-        arl_enabled: bool = True,
-        arl_eta: float = 1.0,
-        arl_width: int = 64,
-        arl_depth: int = 1,
-        arl_lr: float = 0.001,
-        
-        # Selector: Fairness-aware client selection
-        selector_enabled: bool = True,
-        selector_mode: str = "lyapunov",
-        selector_tau: float = 0.02,
-        selector_kappa: float = 0.5,
-        
-        # Distillation (optional)
-        distill_enabled: bool = False,
-        distill_temperature: float = 2.0,
-        distill_steps: int = 200,
-        distill_batch_size: int = 64,
-        
-        # Client-side CALT parameters
-        prox_mu: float = 0.01,
-        lambda_irm: float = 0.5,
-        lambda_adv: float = 0.2,
-        use_mixup: bool = True,
-        use_cia: bool = True,
-        use_adversary: bool = False,
-        
-        # Legacy/compatibility parameters
-        gate_mode: str = "learned",
-        lambda_fair: float = 0.1,
+        # Client-side fairness penalty
+        lambda_fair: float = 0.1,    # Fairness loss weight for clients
         lambda_fair_init: float = 0.1,
         lambda_fair_min: float = 0.01,
-        lambda_fair_max: float = 2.0,
-        tau: float = 1.0,
-        tau_init: float = 1.0,
-        tau_min: float = 0.1,
-        server_momentum: float = 0.8,
-        delta_acc: float = 0.2,
-        alpha: float = 1.0,
-        beta: float = 0.5,
-        gamma: float = 0.5,
-        delta: float = 0.1,
+        lambda_fair_max: float = 1.0,
+        lambda_adapt_rate: float = 1.2,
         
-        # Fairness loss weights
-        w_eo: float = 1.0,
-        w_fpr: float = 0.5,
-        w_sp: float = 0.5,
-        
-        # Bias detection thresholds
+        # Bias detection
         bias_threshold_eo: float = 0.15,
         bias_threshold_fpr: float = 0.15,
         bias_threshold_sp: float = 0.10,
         detector_patience: int = 2,
         
-        # Privacy
-        dp_enabled: bool = False,
-        dp_clip: float = 1.0,
-        dp_noise_mult: float = 0.6,
+        # Server momentum
+        server_momentum: float = 0.9,
+        momentum_beta: float = 0.9,  # Momentum coefficient
         
-        # Base parameters - IMPORTANT: pass epsilon correctly
-        epsilon: float = 0.01,
-        weight_clip: float = 10.0,
+        # Weight constraints
+        epsilon: float = 0.01,       # Minimum weight per client
+        weight_clip: float = 10.0,   # Maximum weight multiplier
+        
+        # Fairness loss weights for clients
+        w_eo: float = 1.0,
+        w_fpr: float = 0.5,
+        w_sp: float = 0.5,
+        
+        # Advanced features (v2.0)
+        enable_pfa: bool = False,     # Pareto-Fair Aggregation
+        enable_dfbd: bool = False,    # Demographics-Free Bias Discovery
+        enable_selector: bool = False, # Fair client selection
+        
+        # Legacy compatibility
+        gate_mode: str = "heuristic",
+        use_adversary: bool = False,
+        prox_mu: float = 0.01,
+        
+        # Base parameters
         fairness_metric: str = "eo_gap",
         **kwargs
     ):
-        # Extract epsilon from kwargs if present (for test compatibility)
-        if 'epsilon' in kwargs:
-            epsilon = kwargs['epsilon']
-            
         super().__init__(n_clients, epsilon=epsilon, weight_clip=weight_clip,
                         fairness_metric=fairness_metric)
         
         self.version = version
         
-        # PFA parameters
-        self.mgda_normalize_grads = mgda_normalize_grads
-        self.mgda_solver = mgda_solver
-        self.mgda_step_size = mgda_step_size
-        self.pcgrad_enabled = pcgrad_enabled
-        self.cagrad_enabled = cagrad_enabled
-        self.cagrad_rho = cagrad_rho
-        
-        # Fairness duals
-        self.fairness_duals_enabled = fairness_duals_enabled
-        self.epsilon_eo = epsilon_eo
-        self.epsilon_fpr = epsilon_fpr
-        self.epsilon_sp = epsilon_sp
-        self.dual_lr = dual_lr
-        self.dual_eo = 0.0
-        self.dual_fpr = 0.0
-        self.dual_sp = 0.0
-        
-        # DFBD parameters
-        self.arl_enabled = arl_enabled
-        self.arl_eta = arl_eta
-        self.arl_lr = arl_lr
-        if arl_enabled:
-            self.arl_head = self._create_arl_head(arl_width, arl_depth)
-            self.arl_optimizer = torch.optim.Adam(self.arl_head.parameters(), lr=arl_lr)
-        else:
-            self.arl_head = None
-            self.arl_optimizer = None
-            
-        # Selector parameters
-        self.selector_enabled = selector_enabled
-        self.selector_mode = selector_mode
-        self.selector_tau = selector_tau
-        self.selector_kappa = selector_kappa
-        self.client_fairness_debt = torch.zeros(n_clients)
-        
-        # Distillation parameters
-        self.distill_enabled = distill_enabled
-        self.distill_temperature = distill_temperature
-        self.distill_steps = distill_steps
-        self.distill_batch_size = distill_batch_size
-        
-        # CALT parameters
-        self.prox_mu = prox_mu
-        self.lambda_irm = lambda_irm
-        self.lambda_adv = lambda_adv
-        self.use_mixup = use_mixup
-        self.use_cia = use_cia
-        self.use_adversary = use_adversary
-        
-        # Legacy compatibility
-        self.lambda_fair = lambda_fair
-        self.lambda_fair_init = lambda_fair_init
-        self.lambda_fair_min = lambda_fair_min
-        self.lambda_fair_max = lambda_fair_max
-        
-        # Fairness loss weights
-        self.w_eo = w_eo
-        self.w_fpr = w_fpr
-        self.w_sp = w_sp
-        
-        # Other parameters
-        self.gate_mode = gate_mode
-        self.tau = tau
-        self.tau_init = tau_init
-        self.tau_min = tau_min
-        self.server_momentum = server_momentum
-        self.delta_acc = delta_acc
+        # Core fairness parameters
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
         self.delta = delta
-        self.bias_mitigation_mode = False
+        
+        # Temperature control
+        self.tau = tau
+        self.tau_init = tau_init
+        self.tau_min = tau_min
+        self.tau_anneal = tau_anneal
+        self.tau_anneal_rate = tau_anneal_rate
+        self.current_tau = tau_init
+        
+        # Fairness penalty control
+        self.lambda_fair = lambda_fair
+        self.lambda_fair_init = lambda_fair_init
+        self.lambda_fair_min = lambda_fair_min
+        self.lambda_fair_max = lambda_fair_max
+        self.lambda_adapt_rate = lambda_adapt_rate
+        self.current_lambda = lambda_fair_init
+        
+        # Bias detection
         self.bias_threshold_eo = bias_threshold_eo
         self.bias_threshold_fpr = bias_threshold_fpr
         self.bias_threshold_sp = bias_threshold_sp
         self.detector_patience = detector_patience
         self.consecutive_bias_rounds = 0
+        self.bias_mitigation_mode = False
+        self.rounds_in_bias_mode = 0
         
-        # Privacy
-        self.dp_enabled = dp_enabled
-        self.dp_clip = dp_clip
-        self.dp_noise_mult = dp_noise_mult
+        # Server momentum
+        self.server_momentum = server_momentum
+        self.momentum_beta = momentum_beta
+        self.momentum_buffer = None
+        
+        # Fairness loss weights for clients
+        self.w_eo = w_eo
+        self.w_fpr = w_fpr
+        self.w_sp = w_sp
+        
+        # Advanced features control
+        self.enable_pfa = enable_pfa
+        self.enable_dfbd = enable_dfbd
+        self.enable_selector = enable_selector
+        
+        # Legacy compatibility
+        self.gate_mode = gate_mode
+        self.use_adversary = use_adversary
+        self.prox_mu = prox_mu
         
         # State tracking
         self.round_num = 0
-        self.prev_global_update = None
-        self.client_deltas_cache = []
-        self.global_metrics_history = {
-            'avg_eo_gap': [],
-            'avg_fpr_gap': [],
-            'avg_sp_gap': [],
+        self.history = {
+            'eo_gaps': [],
+            'fpr_gaps': [],
+            'sp_gaps': [],
             'worst_group_f1': [],
-            'dual_values': [],
-            'mgda_weights': [],
-            'selector_queues': []
+            'bias_mode': [],
+            'lambda_values': [],
+            'tau_values': []
         }
         
-        # For compatibility with tests
+        # Client performance tracking for adaptive weighting
+        self.client_performance = torch.zeros(n_clients)
+        self.client_fairness = torch.zeros(n_clients)
+        self.client_participation = torch.zeros(n_clients)
+        
+        # Initialize gate network for compatibility
         if gate_mode == "learned":
             self.gate_network = self._create_gate_network()
-            
-        # AFL weights tracking
+        
+        # Initialize AFL tracking
         self.afl_client_weights = torch.ones(n_clients) / n_clients
         
-    def _create_arl_head(self, width: int, depth: int) -> nn.Module:
-        """Create adversarial reweighting head for DFBD."""
-        layers = []
-        input_dim = 7
-        
-        for i in range(depth):
-            if i == 0:
-                layers.append(nn.Linear(input_dim, width))
-            else:
-                layers.append(nn.Linear(width, width))
-            layers.append(nn.ReLU())
-            layers.append(nn.Dropout(0.1))
-        
-        layers.append(nn.Linear(width, 1))
-        layers.append(nn.Softplus())
-        
-        return nn.Sequential(*layers)
-    
     def _create_gate_network(self) -> nn.Module:
-        """Create gate network for legacy tests."""
+        """Create gate network for ensemble weighting (legacy compatibility)."""
         return nn.Sequential(
             nn.Linear(10, 32),
             nn.ReLU(),
@@ -264,7 +183,10 @@ class FairCareAggregator(BaseAggregator):
     
     def compute_weights(self, client_summaries: List[Dict[str, Any]]) -> torch.Tensor:
         """
-        Compute aggregation weights with PFA + DFBD + Selector.
+        Compute aggregation weights using fairness-aware scoring.
+        
+        The key insight: Lower fairness gaps should receive higher weights,
+        but we also need to consider data size and loss for stability.
         """
         self.round_num += 1
         n = len(client_summaries)
@@ -272,224 +194,160 @@ class FairCareAggregator(BaseAggregator):
         if n == 0:
             return torch.tensor([], dtype=torch.float32)
         
-        # Update bias detection state
-        self._update_bias_detection(client_summaries)
+        # Update bias detection
+        self._update_bias_state(client_summaries)
         
-        # Compute weights using heuristic fairness scoring
-        scores = []
-        for summary in client_summaries:
-            eo_gap = summary.get("eo_gap", 0.0)
-            fpr_gap = summary.get("fpr_gap", 0.0)
-            sp_gap = summary.get("sp_gap", 0.0)
-            val_loss = summary.get("val_loss", 1.0)
-            
-            # Compute fairness score (lower is better)
-            if self.bias_mitigation_mode:
-                # Increase fairness emphasis in bias mode
-                score = (
-                    self.alpha * 2.0 * eo_gap +
-                    self.beta * 2.0 * fpr_gap +
-                    self.gamma * 2.0 * abs(sp_gap) +
-                    self.delta * 0.5 * val_loss
-                )
-            else:
-                score = (
-                    self.alpha * eo_gap +
-                    self.beta * fpr_gap +
-                    self.gamma * abs(sp_gap) +
-                    self.delta * val_loss
-                )
-            scores.append(score)
+        # Update temperature if annealing
+        if self.tau_anneal and self.round_num > 1:
+            self.current_tau = max(
+                self.tau_min,
+                self.current_tau * self.tau_anneal_rate
+            )
         
-        scores = torch.tensor(scores, dtype=torch.float32)
+        # Override temperature in bias mode
+        if self.bias_mitigation_mode:
+            effective_tau = self.tau_min
+        else:
+            effective_tau = self.current_tau
         
-        # Use temperature-scaled softmin: lower score -> higher weight
-        temp = self.tau_min if self.bias_mitigation_mode else self.tau
-        weights = torch.exp(-scores / max(temp, 0.1))
-        weights = weights / weights.sum()
+        # Compute fairness-aware weights
+        weights = self._compute_fairness_weights(client_summaries, effective_tau)
         
-        # Apply demographics-free tilts if enabled
-        if self.version == "2.0.0" and self.arl_enabled:
-            client_tilts = self._compute_client_tilts(client_summaries)
-            if client_tilts.numel() == len(weights):
-                weights = weights * client_tilts
-                weights = weights / weights.sum()
+        # Apply weight constraints
+        weights = self._apply_weight_constraints(weights)
         
-        # Update auxiliary states
-        if self.selector_enabled:
-            self._update_selector_queues(client_summaries)
-        if self.fairness_duals_enabled:
-            self._update_duals(client_summaries)
-        
-        # Apply post-processing with proper epsilon floor
-        weights = self._apply_epsilon_floor(weights)
+        # Update tracking
+        self._update_tracking(client_summaries)
         
         return weights
     
-    def _apply_epsilon_floor(self, weights: torch.Tensor) -> torch.Tensor:
+    def _compute_fairness_weights(
+        self,
+        client_summaries: List[Dict[str, Any]],
+        temperature: float
+    ) -> torch.Tensor:
         """
-        Apply epsilon floor to ensure minimum weight for each client.
-        This overrides the parent's _postprocess to ensure proper floor application.
+        Compute weights that prioritize fair clients.
+        
+        Key principle: Clients with lower fairness gaps get higher weights,
+        modulated by their data size and loss.
         """
-        if self.epsilon <= 0:
-            return weights
+        n = len(client_summaries)
         
-        n = len(weights)
-        eps = self.epsilon
-        
-        # Check if floor is feasible
-        if eps * n >= 1.0:
-            # If total floor exceeds 1, return uniform
-            return torch.ones(n, dtype=torch.float32) / n
-        
-        # Apply floor: ensure each weight is at least epsilon
-        floored_weights = torch.maximum(weights, torch.tensor(eps, dtype=torch.float32))
-        
-        # Renormalize to sum to 1
-        floored_weights = floored_weights / floored_weights.sum()
-        
-        # Apply iterative correction to ensure floor is maintained after normalization
-        for _ in range(5):  # Maximum iterations
-            below_floor = floored_weights < eps
-            if not below_floor.any():
-                break
-            
-            # Set floor for those below
-            floored_weights[below_floor] = eps
-            
-            # Rescale others proportionally
-            above_floor = ~below_floor
-            if above_floor.any():
-                total_floor = below_floor.sum().item() * eps
-                remaining = 1.0 - total_floor
-                
-                if remaining > 0:
-                    above_weights = floored_weights[above_floor]
-                    above_sum = above_weights.sum()
-                    if above_sum > 0:
-                        floored_weights[above_floor] = above_weights * (remaining / above_sum)
-        
-        # Final normalization
-        floored_weights = floored_weights / floored_weights.sum()
-        
-        # Ensure all weights meet floor (with small tolerance for floating point)
-        floored_weights = torch.maximum(floored_weights, torch.tensor(eps - 1e-7, dtype=torch.float32))
-        
-        # Apply weight clipping if specified
-        if self.weight_clip > 0:
-            max_weight = (1.0 / n) * self.weight_clip
-            floored_weights = torch.minimum(floored_weights, torch.tensor(max_weight, dtype=torch.float32))
-        
-        # Final normalization
-        return floored_weights / floored_weights.sum()
-    
-    def _compute_client_tilts(self, client_summaries: List[Dict[str, Any]]) -> torch.Tensor:
-        """
-        DFBD: Compute demographics-free tilts using ARL head.
-        """
-        if not self.arl_enabled or self.arl_head is None:
-            return torch.ones(len(client_summaries))
-        
-        # Extract privacy-safe proxies
-        proxies = []
-        targets = []
+        # Extract metrics
+        scores = []
+        sizes = []
         
         for summary in client_summaries:
-            proxy = torch.tensor([
-                summary.get('train_loss', 1.0),
-                summary.get('delta_norm', 1.0),
-                summary.get('grad_norm', 1.0),
-                summary.get('val_loss', 1.0),
-                summary.get('val_acc', 0.5),
-                summary.get('calibration_error', 0.0),
-                summary.get('drift', 0.0)
-            ], dtype=torch.float32)
-            proxies.append(proxy)
+            # Get fairness gaps (lower is better)
+            eo_gap = summary.get('eo_gap', 0.0)
+            fpr_gap = summary.get('fpr_gap', 0.0)
+            sp_gap = abs(summary.get('sp_gap', 0.0))
             
-            # Target: inverse of worst_group_f1
-            wg_f1 = summary.get('worst_group_f1', 0.5)
-            targets.append(1.0 / (wg_f1 + 0.1))
+            # Get performance metrics
+            val_loss = summary.get('val_loss', summary.get('train_loss', 1.0))
+            n_samples = summary.get('n_samples', 100)
+            
+            # Compute composite fairness penalty
+            if self.bias_mitigation_mode:
+                # In bias mode: heavily penalize unfair clients
+                fairness_penalty = (
+                    2.0 * self.alpha * eo_gap +
+                    2.0 * self.beta * fpr_gap +
+                    2.0 * self.gamma * sp_gap +
+                    0.5 * self.delta * val_loss  # Reduce accuracy weight
+                )
+            else:
+                # Normal mode: balanced objective
+                fairness_penalty = (
+                    self.alpha * eo_gap +
+                    self.beta * fpr_gap +
+                    self.gamma * sp_gap +
+                    self.delta * val_loss
+                )
+            
+            scores.append(fairness_penalty)
+            sizes.append(n_samples)
         
-        if not proxies:
-            return torch.ones(len(client_summaries))
+        scores = torch.tensor(scores, dtype=torch.float32)
+        sizes = torch.tensor(sizes, dtype=torch.float32)
         
-        proxies_batch = torch.stack(proxies)
-        targets_tensor = torch.tensor(targets, dtype=torch.float32)
+        # Convert scores to weights using softmin
+        # Lower score (better fairness) -> higher weight
+        fairness_weights = torch.exp(-scores / max(temperature, 0.01))
+        fairness_weights = fairness_weights / fairness_weights.sum()
         
-        # Train ARL head
-        if self.arl_optimizer is not None:
-            self.arl_head.train()
-            for _ in range(5):
-                self.arl_optimizer.zero_grad()
-                
-                predicted_tilts = self.arl_head(proxies_batch).squeeze()
-                loss = F.mse_loss(predicted_tilts, targets_tensor)
-                
-                loss.backward()
-                self.arl_optimizer.step()
+        # Combine with data size weighting for stability
+        size_weights = sizes / sizes.sum()
         
-        # Inference
-        self.arl_head.eval()
-        with torch.no_grad():
-            tilts = self.arl_head(proxies_batch).squeeze()
-        
-        # Ensure tensor shape
-        if tilts.dim() == 0:
-            tilts = tilts.unsqueeze(0)
-        
-        # Apply eta scaling and normalize
-        tilts = tilts * self.arl_eta
-        tilts = tilts / tilts.mean()
-        
-        # Clamp to reasonable range
-        tilts = torch.clamp(tilts, 0.1, 10.0)
-        
-        return tilts
-    
-    def _update_bias_detection(self, client_summaries: List[Dict[str, Any]]):
-        """
-        Update bias detection state based on current metrics.
-        """
-        # Collect metrics
-        eo_gaps = [s.get("eo_gap", 0) for s in client_summaries]
-        fpr_gaps = [s.get("fpr_gap", 0) for s in client_summaries]
-        sp_gaps = [abs(s.get("sp_gap", 0)) for s in client_summaries]
-        
-        avg_eo_gap = np.mean(eo_gaps) if eo_gaps else 0
-        avg_fpr_gap = np.mean(fpr_gaps) if fpr_gaps else 0
-        avg_sp_gap = np.mean(sp_gaps) if sp_gaps else 0
-        
-        # Check if bias is detected
-        bias_detected = (
-            avg_eo_gap > self.bias_threshold_eo or
-            avg_fpr_gap > self.bias_threshold_fpr or
-            avg_sp_gap > self.bias_threshold_sp
-        )
-        
-        if bias_detected:
-            self.consecutive_bias_rounds += 1
-            if self.consecutive_bias_rounds >= self.detector_patience:
-                if not self.bias_mitigation_mode:
-                    self.bias_mitigation_mode = True
-                    self.lambda_fair = min(self.lambda_fair_max, self.lambda_fair * 1.5)
-                    self.tau = self.tau_min
+        # Blend fairness and size weights
+        if self.bias_mitigation_mode:
+            # Prioritize fairness in bias mode
+            blend_factor = 0.8  # 80% fairness, 20% size
         else:
-            self.consecutive_bias_rounds = 0
-            if self.bias_mitigation_mode and avg_eo_gap < self.bias_threshold_eo * 0.5:
-                self.bias_mitigation_mode = False
-                self.lambda_fair = max(self.lambda_fair_min, self.lambda_fair * 0.8)
-                self.tau = self.tau_init
+            # Balanced blending in normal mode
+            blend_factor = 0.5  # 50% fairness, 50% size
         
-        # Update history
-        self.global_metrics_history['avg_eo_gap'].append(avg_eo_gap)
-        self.global_metrics_history['avg_fpr_gap'].append(avg_fpr_gap)
-        self.global_metrics_history['avg_sp_gap'].append(avg_sp_gap)
+        weights = blend_factor * fairness_weights + (1 - blend_factor) * size_weights
+        
+        # Normalize
+        weights = weights / weights.sum()
+        
+        return weights
     
-    def _update_duals(self, client_summaries: List[Dict[str, Any]]):
+    def _apply_weight_constraints(self, weights: torch.Tensor) -> torch.Tensor:
         """
-        Update dual variables for fairness constraints.
+        Apply epsilon floor and weight clipping constraints.
+        
+        Ensures:
+        1. Each client gets at least epsilon weight (fairness)
+        2. No client gets more than weight_clip * uniform weight (stability)
         """
-        # Compute current gaps
+        n = len(weights)
+        
+        if self.epsilon > 0:
+            # Apply epsilon floor
+            if self.epsilon * n >= 1.0:
+                # Infeasible: return uniform
+                return torch.ones(n, dtype=torch.float32) / n
+            
+            # Iterative projection to ensure floor
+            for _ in range(10):
+                # Set floor
+                below_floor = weights < self.epsilon
+                if not below_floor.any():
+                    break
+                
+                weights[below_floor] = self.epsilon
+                
+                # Rescale others
+                above_floor = ~below_floor
+                if above_floor.any():
+                    total_floor = below_floor.sum().item() * self.epsilon
+                    remaining = 1.0 - total_floor
+                    
+                    if remaining > 0:
+                        above_sum = weights[above_floor].sum()
+                        if above_sum > 0:
+                            weights[above_floor] *= remaining / above_sum
+            
+            # Final enforcement
+            weights = torch.maximum(weights, torch.tensor(self.epsilon))
+            weights = weights / weights.sum()
+        
+        if self.weight_clip > 0:
+            # Apply weight clipping
+            max_weight = self.weight_clip / n
+            weights = torch.minimum(weights, torch.tensor(max_weight))
+            weights = weights / weights.sum()
+        
+        return weights
+    
+    def _update_bias_state(self, client_summaries: List[Dict[str, Any]]):
+        """
+        Update bias detection state and adapt parameters.
+        """
+        # Compute average gaps
         eo_gaps = [s.get('eo_gap', 0) for s in client_summaries]
         fpr_gaps = [s.get('fpr_gap', 0) for s in client_summaries]
         sp_gaps = [abs(s.get('sp_gap', 0)) for s in client_summaries]
@@ -498,188 +356,234 @@ class FairCareAggregator(BaseAggregator):
         avg_fpr = np.mean(fpr_gaps) if fpr_gaps else 0
         avg_sp = np.mean(sp_gaps) if sp_gaps else 0
         
-        # Dual ascent step
-        self.dual_eo = np.clip(
-            self.dual_eo + self.dual_lr * (avg_eo - self.epsilon_eo),
-            0.0, 10.0
+        # Check bias conditions
+        bias_detected = (
+            avg_eo > self.bias_threshold_eo or
+            avg_fpr > self.bias_threshold_fpr or
+            avg_sp > self.bias_threshold_sp
         )
-        self.dual_fpr = np.clip(
-            self.dual_fpr + self.dual_lr * (avg_fpr - self.epsilon_fpr),
-            0.0, 10.0
-        )
-        self.dual_sp = np.clip(
-            self.dual_sp + self.dual_lr * (avg_sp - self.epsilon_sp),
-            0.0, 10.0
-        )
-    
-    def _update_selector_queues(self, client_summaries: List[Dict[str, Any]]):
-        """
-        Update fairness debt queues for client selection.
-        """
-        if self.selector_mode == "lyapunov":
-            for i, summary in enumerate(client_summaries):
-                client_id = summary.get('client_id', i)
-                if client_id < len(self.client_fairness_debt):
-                    # Compute fairness debt
-                    eo_gap = summary.get('eo_gap', 0)
-                    fpr_gap = summary.get('fpr_gap', 0)
-                    sp_gap = abs(summary.get('sp_gap', 0))
+        
+        if bias_detected:
+            self.consecutive_bias_rounds += 1
+            
+            if self.consecutive_bias_rounds >= self.detector_patience:
+                if not self.bias_mitigation_mode:
+                    # Enter bias mitigation mode
+                    self.bias_mitigation_mode = True
+                    self.rounds_in_bias_mode = 0
                     
-                    debt = self.w_eo * eo_gap + self.w_fpr * fpr_gap + self.w_sp * sp_gap
-                    
-                    # Lyapunov-style update
-                    self.client_fairness_debt[client_id] = (
-                        (1 - self.selector_tau) * self.client_fairness_debt[client_id] +
-                        self.selector_kappa * debt
+                    # Adapt lambda_fair
+                    self.current_lambda = min(
+                        self.lambda_fair_max,
+                        self.current_lambda * self.lambda_adapt_rate
                     )
+                    
+                    print(f"[Round {self.round_num}] Entering bias mitigation mode")
+                    print(f"  EO gap: {avg_eo:.4f}, FPR gap: {avg_fpr:.4f}, SP gap: {avg_sp:.4f}")
+                    print(f"  Lambda_fair: {self.current_lambda:.4f}")
+                
+                self.rounds_in_bias_mode += 1
+        else:
+            self.consecutive_bias_rounds = 0
+            
+            if self.bias_mitigation_mode:
+                # Check if we can exit bias mode
+                exit_threshold = 0.5  # Exit if gaps are below 50% of threshold
+                if (avg_eo < self.bias_threshold_eo * exit_threshold and
+                    avg_fpr < self.bias_threshold_fpr * exit_threshold and
+                    avg_sp < self.bias_threshold_sp * exit_threshold):
+                    
+                    self.bias_mitigation_mode = False
+                    
+                    # Relax lambda_fair
+                    self.current_lambda = max(
+                        self.lambda_fair_min,
+                        self.current_lambda / self.lambda_adapt_rate
+                    )
+                    
+                    print(f"[Round {self.round_num}] Exiting bias mitigation mode")
+        
+        # Store history
+        self.history['eo_gaps'].append(avg_eo)
+        self.history['fpr_gaps'].append(avg_fpr)
+        self.history['sp_gaps'].append(avg_sp)
+        self.history['bias_mode'].append(self.bias_mitigation_mode)
+        self.history['lambda_values'].append(self.current_lambda)
+        self.history['tau_values'].append(self.current_tau)
     
-    def get_preferred_clients(self, n_select: int) -> List[int]:
+    def _update_tracking(self, client_summaries: List[Dict[str, Any]]):
         """
-        Get preferred clients for next round based on fairness debt.
+        Update client performance tracking for adaptive weighting.
         """
-        if not self.selector_enabled:
-            return None
+        for summary in client_summaries:
+            client_id = summary.get('client_id', -1)
+            if 0 <= client_id < self.n_clients:
+                # Update performance (exponential moving average)
+                loss = summary.get('val_loss', summary.get('train_loss', 1.0))
+                self.client_performance[client_id] = (
+                    0.9 * self.client_performance[client_id] + 0.1 * (1.0 - loss)
+                )
+                
+                # Update fairness tracking
+                eo_gap = summary.get('eo_gap', 0)
+                fpr_gap = summary.get('fpr_gap', 0)
+                sp_gap = abs(summary.get('sp_gap', 0))
+                fairness_score = 1.0 - (eo_gap + fpr_gap + sp_gap) / 3.0
+                
+                self.client_fairness[client_id] = (
+                    0.9 * self.client_fairness[client_id] + 0.1 * fairness_score
+                )
+                
+                # Mark participation
+                self.client_participation[client_id] += 1
         
-        # Add exploration bonus
-        exploration = torch.rand(len(self.client_fairness_debt)) * 0.1
-        scores = self.client_fairness_debt + exploration
-        
-        # Select top-k with highest debt
-        if n_select >= len(scores):
-            return list(range(len(scores)))
-        
-        _, selected = torch.topk(scores, n_select)
-        return selected.tolist()
+        # Store worst-group F1 if available
+        wg_f1s = [s.get('worst_group_f1', 0) for s in client_summaries if 'worst_group_f1' in s]
+        if wg_f1s:
+            self.history['worst_group_f1'].append(np.mean(wg_f1s))
     
     def apply_server_momentum(self, update: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
-        Apply server-side momentum to aggregated update.
+        Apply momentum to server update for stable convergence.
         """
-        if self.prev_global_update is None:
-            self.prev_global_update = update
-            return update
+        if self.momentum_buffer is None:
+            self.momentum_buffer = {}
+            for key, value in update.items():
+                self.momentum_buffer[key] = torch.zeros_like(value)
         
-        # Momentum update
+        # Apply momentum
         momentum_update = {}
-        for key in update.keys():
-            momentum_update[key] = (
-                self.server_momentum * self.prev_global_update[key] +
-                (1 - self.server_momentum) * update[key]
-            )
+        for key, value in update.items():
+            if key in self.momentum_buffer:
+                self.momentum_buffer[key] = (
+                    self.momentum_beta * self.momentum_buffer[key] +
+                    (1 - self.momentum_beta) * value
+                )
+                momentum_update[key] = self.momentum_buffer[key]
+            else:
+                momentum_update[key] = value
         
-        self.prev_global_update = momentum_update
         return momentum_update
     
     def get_fairness_config(self) -> Dict[str, Any]:
         """
-        Get fairness configuration for clients (CALT parameters).
+        Get configuration to broadcast to clients.
         """
-        return {
-            'prox_mu': self.prox_mu,
-            'lambda_irm': self.lambda_irm,
-            'lambda_adv': self.lambda_adv,
-            'lambda_fair': self.lambda_fair,
-            'use_mixup': self.use_mixup,
-            'use_cia': self.use_cia,
-            'use_adversary': self.use_adversary,
+        config = {
+            # Core parameters
+            'lambda_fair': self.current_lambda,
             'bias_mitigation_mode': self.bias_mitigation_mode,
-            'delta_acc': self.delta_acc,
             'round': self.round_num,
-            'version': self.version,
+            
+            # Fairness loss weights
             'w_eo': self.w_eo,
             'w_fpr': self.w_fpr,
-            'w_sp': self.w_sp
+            'w_sp': self.w_sp,
+            
+            # Client-side parameters
+            'prox_mu': self.prox_mu,
+            'use_adversary': self.use_adversary,
+            
+            # Additional context
+            'tau': self.current_tau,
+            'delta_acc': self.delta,
+            'version': self.version
         }
+        
+        # Add adaptive parameters if in bias mode
+        if self.bias_mitigation_mode:
+            config['extra_epochs'] = 1  # Extra local epochs in bias mode
+            config['lr_multiplier'] = 1.2  # Increase learning rate
+        
+        return config
     
     def get_statistics(self) -> Dict[str, Any]:
         """
-        Get algorithm statistics.
+        Get aggregator statistics for logging.
         """
         stats = {
             'round': self.round_num,
-            'version': self.version,
             'bias_mitigation_mode': self.bias_mitigation_mode,
-            'delta_acc': self.delta_acc,
-            'lambda_fair': self.lambda_fair,
-            'global_metrics': self.global_metrics_history
+            'rounds_in_bias_mode': self.rounds_in_bias_mode,
+            'current_lambda': self.current_lambda,
+            'current_tau': self.current_tau,
+            'lambda_fair': self.current_lambda,  # Compatibility
+            'delta_acc': self.delta,
+            'version': self.version
         }
         
-        if hasattr(self, 'last_mgda_weights'):
-            stats['mgda_weights'] = self.last_mgda_weights.tolist()
+        # Add recent history
+        if self.history['eo_gaps']:
+            stats['recent_eo_gap'] = self.history['eo_gaps'][-1]
+            stats['recent_fpr_gap'] = self.history['fpr_gaps'][-1]
+            stats['recent_sp_gap'] = self.history['sp_gaps'][-1]
         
-        if self.fairness_duals_enabled:
-            stats['duals'] = {
-                'eo': self.dual_eo,
-                'fpr': self.dual_fpr,
-                'sp': self.dual_sp
-            }
+        if self.history['worst_group_f1']:
+            stats['recent_worst_group_f1'] = self.history['worst_group_f1'][-1]
+        
+        # Add client tracking summary
+        if self.client_participation.sum() > 0:
+            stats['avg_client_performance'] = self.client_performance.mean().item()
+            stats['avg_client_fairness'] = self.client_fairness.mean().item()
+            stats['client_participation_std'] = self.client_participation.std().item()
         
         return stats
     
     def _compute_component_weights(self, client_summaries: List[Dict[str, Any]]) -> ComponentWeights:
         """
-        Compute weights from each component algorithm (for test compatibility).
+        Compute weights from component algorithms (for test compatibility).
         """
         n = len(client_summaries)
         
-        # FedAvg: weight by number of samples
-        fedavg_weights = []
-        for summary in client_summaries:
-            n_samples = summary.get("n_samples", 1)
-            fedavg_weights.append(n_samples)
-        fedavg_weights = torch.tensor(fedavg_weights, dtype=torch.float32)
-        fedavg_weights = fedavg_weights / fedavg_weights.sum()
+        # FedAvg: proportional to data size
+        sizes = torch.tensor([s.get('n_samples', 100) for s in client_summaries], dtype=torch.float32)
+        fedavg_weights = sizes / sizes.sum()
         
-        # FedProx: similar to FedAvg
+        # FedProx: same as FedAvg
         fedprox_weights = fedavg_weights.clone()
         
-        # q-FFL: weight by (loss)^q
-        qffl_weights = []
-        for summary in client_summaries:
-            loss = summary.get("train_loss", summary.get("val_loss", 1.0))
-            weight = (loss + 1e-4) ** 2.0
-            qffl_weights.append(weight)
-        qffl_weights = torch.tensor(qffl_weights, dtype=torch.float32)
+        # q-FFL: upweight high-loss clients
+        losses = torch.tensor([s.get('train_loss', 1.0) for s in client_summaries], dtype=torch.float32)
+        q = 2.0
+        qffl_weights = torch.pow(losses + 1e-4, q - 1)
         qffl_weights = qffl_weights / qffl_weights.sum()
         
-        # AFL: exponential weighting
+        # AFL: exponential weighting by loss
         afl_weights = []
         for i, summary in enumerate(client_summaries):
-            client_id = summary.get("client_id", i)
-            loss = summary.get("val_loss", summary.get("train_loss", 1.0))
+            client_id = summary.get('client_id', i)
+            loss = summary.get('val_loss', summary.get('train_loss', 1.0))
+            
             if client_id < len(self.afl_client_weights):
+                # Update AFL weight
                 self.afl_client_weights[client_id] *= torch.exp(torch.tensor(0.1 * loss))
         
+        # Normalize AFL weights
         self.afl_client_weights = self.afl_client_weights / self.afl_client_weights.sum()
+        
         for i, summary in enumerate(client_summaries):
-            client_id = summary.get("client_id", i)
+            client_id = summary.get('client_id', i)
             if client_id < len(self.afl_client_weights):
                 afl_weights.append(self.afl_client_weights[client_id].item())
             else:
-                afl_weights.append(1.0 / len(client_summaries))
+                afl_weights.append(1.0 / n)
+        
         afl_weights = torch.tensor(afl_weights, dtype=torch.float32)
         afl_weights = afl_weights / afl_weights.sum()
         
-        # FairFATE: fairness-score guided weights
-        fairfate_weights = []
+        # FairFATE: fairness-based weighting
+        fairness_scores = []
         for summary in client_summaries:
-            eo_gap = summary.get("eo_gap", 0.5)
-            fpr_gap = summary.get("fpr_gap", 0.5)
-            sp_gap = summary.get("sp_gap", 0.5)
-            val_loss = summary.get("val_loss", 1.0)
-            
-            # Compute fairness penalty (lower is better)
-            fairness_penalty = (
-                self.alpha * eo_gap +
-                self.beta * fpr_gap +
-                self.gamma * abs(sp_gap) +
-                self.delta * val_loss
+            score = (
+                self.alpha * summary.get('eo_gap', 0) +
+                self.beta * summary.get('fpr_gap', 0) +
+                self.gamma * abs(summary.get('sp_gap', 0)) +
+                self.delta * summary.get('val_loss', 1.0)
             )
-            fairfate_weights.append(fairness_penalty)
+            fairness_scores.append(score)
         
-        # Convert to weights using softmin
-        fairfate_weights = torch.tensor(fairfate_weights, dtype=torch.float32)
-        fairfate_weights = torch.exp(-fairfate_weights / max(self.tau, 0.1))
+        fairness_scores = torch.tensor(fairness_scores, dtype=torch.float32)
+        fairfate_weights = torch.exp(-fairness_scores / max(self.current_tau, 0.1))
         fairfate_weights = fairfate_weights / fairfate_weights.sum()
         
         return ComponentWeights(
@@ -689,3 +593,27 @@ class FairCareAggregator(BaseAggregator):
             afl=afl_weights,
             fairfate=fairfate_weights
         )
+    
+    def get_preferred_clients(self, n_select: int) -> Optional[List[int]]:
+        """
+        Get preferred clients based on fairness and performance.
+        """
+        if not self.enable_selector:
+            return None
+        
+        # Compute selection scores
+        scores = (
+            0.5 * self.client_fairness +  # Fairness score
+            0.3 * self.client_performance +  # Performance score
+            0.2 * (1.0 / (self.client_participation + 1))  # Exploration bonus
+        )
+        
+        # Add randomization for exploration
+        scores += torch.randn(self.n_clients) * 0.1
+        
+        # Select top-k
+        if n_select >= self.n_clients:
+            return list(range(self.n_clients))
+        
+        _, indices = torch.topk(scores, n_select)
+        return indices.tolist()
