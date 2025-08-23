@@ -427,6 +427,91 @@ class Client:
         
         return torch.tensor(0.0, device=self.device)
     
+    # faircare/core/client.py (key excerpt - fairness loss implementation)
+    # Add this method to the Client class to compute proper fairness loss
+
+    def _compute_fairness_loss(
+        self,
+        outputs: torch.Tensor,
+        y: torch.Tensor,
+        a: Optional[torch.Tensor],
+        config: Dict[str, Any]
+    ) -> torch.Tensor:
+        """
+        Compute fairness loss for local training.
+        
+        This is a differentiable approximation of fairness gaps.
+        """
+        if a is None:
+            return torch.tensor(0.0, device=self.device)
+        
+        # Get weights from config
+        w_eo = config.get('w_eo', 1.0)
+        w_fpr = config.get('w_fpr', 0.5)
+        w_sp = config.get('w_sp', 0.5)
+        
+        # Convert to probabilities
+        probs = torch.sigmoid(outputs.squeeze())
+        
+        # Separate groups
+        g0_mask = (a == 0)
+        g1_mask = (a == 1)
+        
+        # Need at least 2 samples per group
+        if g0_mask.sum() < 2 or g1_mask.sum() < 2:
+            return torch.tensor(0.0, device=self.device)
+        
+        eps = 1e-7
+        
+        # Equal Opportunity loss: |TPR_0 - TPR_1|
+        # Soft TPR for group 0
+        g0_pos_mask = g0_mask & (y == 1)
+        if g0_pos_mask.sum() > 0:
+            tpr_0 = probs[g0_pos_mask].mean()
+        else:
+            tpr_0 = torch.tensor(0.5, device=self.device)
+        
+        # Soft TPR for group 1
+        g1_pos_mask = g1_mask & (y == 1)
+        if g1_pos_mask.sum() > 0:
+            tpr_1 = probs[g1_pos_mask].mean()
+        else:
+            tpr_1 = torch.tensor(0.5, device=self.device)
+        
+        eo_loss = (tpr_0 - tpr_1) ** 2
+        
+        # False Positive Rate loss: |FPR_0 - FPR_1|
+        # Soft FPR for group 0
+        g0_neg_mask = g0_mask & (y == 0)
+        if g0_neg_mask.sum() > 0:
+            fpr_0 = probs[g0_neg_mask].mean()
+        else:
+            fpr_0 = torch.tensor(0.5, device=self.device)
+        
+        # Soft FPR for group 1
+        g1_neg_mask = g1_mask & (y == 0)
+        if g1_neg_mask.sum() > 0:
+            fpr_1 = probs[g1_neg_mask].mean()
+        else:
+            fpr_1 = torch.tensor(0.5, device=self.device)
+        
+        fpr_loss = (fpr_0 - fpr_1) ** 2
+        
+        # Statistical Parity loss: |PPR_0 - PPR_1|
+        ppr_0 = probs[g0_mask].mean()
+        ppr_1 = probs[g1_mask].mean()
+        sp_loss = (ppr_0 - ppr_1) ** 2
+        
+        # Combine losses
+        total_fairness_loss = w_eo * eo_loss + w_fpr * fpr_loss + w_sp * sp_loss
+        
+        # Scale by lambda_fair from config
+        lambda_fair = config.get('lambda_fair', 0.1)
+        
+        # Reduce strength to prevent collapse
+        return lambda_fair * 0.1 * total_fairness_loss  # Scale down by 0.1
+
+
     def _mixup(self, X: torch.Tensor, y: torch.Tensor, alpha: float = 0.2) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Mixup augmentation.
