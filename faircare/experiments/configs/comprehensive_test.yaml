@@ -24,7 +24,7 @@ base:
   training:
     algo: "faircare_fl"
     rounds: 50
-    local_epochs: 2
+    local_epochs: 5
     lr: 0.03
     weight_decay: 0.0001
     momentum: 0.0
