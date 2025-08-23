@@ -108,13 +108,13 @@ class FairCareAggregator(BaseAggregator):
         self.tau_anneal_rate = tau_anneal_rate
         self.current_tau = tau_init
         
-        # Fairness penalty control
-        self.lambda_fair = lambda_fair
-        self.lambda_fair_init = lambda_fair_init
+        # Fairness penalty control - IMPORTANT: Use passed lambda_fair value
+        self.lambda_fair = lambda_fair  # This will be updated during runtime
+        self.lambda_fair_init = lambda_fair if lambda_fair_init == 0.1 else lambda_fair_init
         self.lambda_fair_min = lambda_fair_min
         self.lambda_fair_max = lambda_fair_max
         self.lambda_adapt_rate = lambda_adapt_rate
-        self.current_lambda = lambda_fair_init
+        self.current_lambda = lambda_fair  # Start with passed value
         
         # Bias detection
         self.bias_threshold_eo = bias_threshold_eo
@@ -372,11 +372,12 @@ class FairCareAggregator(BaseAggregator):
                     self.bias_mitigation_mode = True
                     self.rounds_in_bias_mode = 0
                     
-                    # Adapt lambda_fair
+                    # Adapt lambda_fair - UPDATE BOTH current_lambda AND lambda_fair
                     self.current_lambda = min(
                         self.lambda_fair_max,
                         self.current_lambda * self.lambda_adapt_rate
                     )
+                    self.lambda_fair = self.current_lambda  # UPDATE the attribute
                     
                     print(f"[Round {self.round_num}] Entering bias mitigation mode")
                     print(f"  EO gap: {avg_eo:.4f}, FPR gap: {avg_fpr:.4f}, SP gap: {avg_sp:.4f}")
@@ -400,6 +401,7 @@ class FairCareAggregator(BaseAggregator):
                         self.lambda_fair_min,
                         self.current_lambda / self.lambda_adapt_rate
                     )
+                    self.lambda_fair = self.current_lambda  # UPDATE the attribute
                     
                     print(f"[Round {self.round_num}] Exiting bias mitigation mode")
         
@@ -470,8 +472,8 @@ class FairCareAggregator(BaseAggregator):
         Get configuration to broadcast to clients.
         """
         config = {
-            # Core parameters
-            'lambda_fair': self.current_lambda,
+            # Core parameters - use current_lambda which reflects the adapted value
+            'lambda_fair': self.current_lambda,  # Return the current adapted value
             'bias_mitigation_mode': self.bias_mitigation_mode,
             'round': self.round_num,
             
@@ -507,7 +509,7 @@ class FairCareAggregator(BaseAggregator):
             'rounds_in_bias_mode': self.rounds_in_bias_mode,
             'current_lambda': self.current_lambda,
             'current_tau': self.current_tau,
-            'lambda_fair': self.current_lambda,  # Compatibility
+            'lambda_fair': self.lambda_fair,  # Return the updated attribute
             'delta_acc': self.delta,
             'version': self.version
         }
