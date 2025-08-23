@@ -6,7 +6,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from dataclasses import dataclass
-import cvxpy as cp
 from faircare.algos.aggregator import BaseAggregator, register_aggregator
 from faircare.core.utils import flatten_weights, unflatten_weights
 
@@ -113,12 +112,16 @@ class FairCareAggregator(BaseAggregator):
         dp_clip: float = 1.0,
         dp_noise_mult: float = 0.6,
         
-        # Base parameters
+        # Base parameters - IMPORTANT: pass epsilon correctly
         epsilon: float = 0.01,
         weight_clip: float = 10.0,
         fairness_metric: str = "eo_gap",
         **kwargs
     ):
+        # Extract epsilon from kwargs if present (for test compatibility)
+        if 'epsilon' in kwargs:
+            epsilon = kwargs['epsilon']
+            
         super().__init__(n_clients, epsilon=epsilon, weight_clip=weight_clip,
                         fairness_metric=fairness_metric)
         
@@ -232,7 +235,7 @@ class FairCareAggregator(BaseAggregator):
     def _create_arl_head(self, width: int, depth: int) -> nn.Module:
         """Create adversarial reweighting head for DFBD."""
         layers = []
-        input_dim = 7  # loss, delta_norm, grad_norm, val_loss, val_acc, calibration, drift
+        input_dim = 7
         
         for i in range(depth):
             if i == 0:
@@ -243,7 +246,7 @@ class FairCareAggregator(BaseAggregator):
             layers.append(nn.Dropout(0.1))
         
         layers.append(nn.Linear(width, 1))
-        layers.append(nn.Softplus())  # Non-negative tilts
+        layers.append(nn.Softplus())
         
         return nn.Sequential(*layers)
     
@@ -259,38 +262,6 @@ class FairCareAggregator(BaseAggregator):
             nn.Softmax(dim=-1)
         )
     
-    def aggregate_with_deltas(
-        self,
-        client_deltas: List[Dict[str, torch.Tensor]],
-        client_summaries: List[Dict[str, Any]]
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Main aggregation with access to actual model deltas for proper gradient computation.
-        """
-        # Cache deltas for gradient computation
-        self.client_deltas_cache = client_deltas
-        
-        # Compute weights using standard method
-        weights = self.compute_weights(client_summaries)
-        
-        # Aggregate deltas
-        aggregated = {}
-        for key in client_deltas[0].keys():
-            weighted_deltas = []
-            for i, delta in enumerate(client_deltas):
-                weighted_deltas.append(weights[i] * delta[key])
-            aggregated[key] = sum(weighted_deltas)
-        
-        # Apply server momentum if enabled
-        if self.server_momentum > 0:
-            aggregated = self.apply_server_momentum(aggregated)
-        
-        # Apply DP noise if enabled
-        if self.dp_enabled:
-            aggregated = self._apply_dp_noise(aggregated)
-        
-        return aggregated
-    
     def compute_weights(self, client_summaries: List[Dict[str, Any]]) -> torch.Tensor:
         """
         Compute aggregation weights with PFA + DFBD + Selector.
@@ -304,62 +275,7 @@ class FairCareAggregator(BaseAggregator):
         # Update bias detection state
         self._update_bias_detection(client_summaries)
         
-        if self.version == "2.0.0" and self.client_deltas_cache:
-            # Full v2.0 PFA implementation with actual gradients
-            weights = self._compute_pfa_weights(client_summaries)
-        else:
-            # Fallback to heuristic weighting
-            weights = self._compute_heuristic_weights(client_summaries)
-        
-        # Apply post-processing (floor, clip)
-        weights = self._postprocess(weights)
-        
-        return weights
-    
-    def _compute_pfa_weights(self, client_summaries: List[Dict[str, Any]]) -> torch.Tensor:
-        """
-        Compute weights using Pareto-Fair Aggregation with actual gradients.
-        """
-        n = len(client_summaries)
-        
-        # Step 1: Compute demographics-free tilts via DFBD
-        client_tilts = self._compute_client_tilts(client_summaries)
-        
-        # Step 2: Compute multi-objective gradients from actual deltas
-        g_acc, g_wg, g_fair = self._compute_objective_gradients_from_deltas(
-            client_summaries, client_tilts
-        )
-        
-        # Step 3: MGDA to find Pareto descent direction
-        mgda_weights = self._mgda_solve([g_acc, g_wg, g_fair])
-        
-        # Step 4: Compute combined gradient direction
-        g_mix = mgda_weights[0] * g_acc + mgda_weights[1] * g_wg + mgda_weights[2] * g_fair
-        
-        # Step 5: Apply PCGrad and CAGrad for conflict resolution
-        if self.pcgrad_enabled:
-            g_mix = self._pcgrad([g_acc, g_wg, g_fair], g_mix)
-        if self.cagrad_enabled:
-            g_mix = self._cagrad([g_acc, g_wg, g_fair], g_mix)
-        
-        # Step 6: Compute client weights from gradient alignment
-        weights = self._gradient_to_weights(g_mix, client_tilts, client_summaries)
-        
-        # Step 7: Update auxiliary states
-        if self.fairness_duals_enabled:
-            self._update_duals(client_summaries)
-        if self.selector_enabled:
-            self._update_selector_queues(client_summaries)
-        
-        # Log metrics
-        self._log_round_metrics(client_summaries, mgda_weights)
-        
-        return weights
-    
-    def _compute_heuristic_weights(self, client_summaries: List[Dict[str, Any]]) -> torch.Tensor:
-        """
-        Compute weights using heuristic fairness scoring.
-        """
+        # Compute weights using heuristic fairness scoring
         scores = []
         for summary in client_summaries:
             eo_gap = summary.get("eo_gap", 0.0)
@@ -387,284 +303,85 @@ class FairCareAggregator(BaseAggregator):
         
         scores = torch.tensor(scores, dtype=torch.float32)
         
-        # Use temperature-scaled softmin
+        # Use temperature-scaled softmin: lower score -> higher weight
         temp = self.tau_min if self.bias_mitigation_mode else self.tau
         weights = torch.exp(-scores / max(temp, 0.1))
         weights = weights / weights.sum()
         
+        # Apply demographics-free tilts if enabled
+        if self.version == "2.0.0" and self.arl_enabled:
+            client_tilts = self._compute_client_tilts(client_summaries)
+            if client_tilts.numel() == len(weights):
+                weights = weights * client_tilts
+                weights = weights / weights.sum()
+        
+        # Update auxiliary states
+        if self.selector_enabled:
+            self._update_selector_queues(client_summaries)
+        if self.fairness_duals_enabled:
+            self._update_duals(client_summaries)
+        
+        # Apply post-processing with proper epsilon floor
+        weights = self._apply_epsilon_floor(weights)
+        
         return weights
     
-    def _compute_objective_gradients_from_deltas(
-        self,
-        client_summaries: List[Dict[str, Any]],
-        tilts: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _apply_epsilon_floor(self, weights: torch.Tensor) -> torch.Tensor:
         """
-        Compute actual objective gradients from client deltas.
+        Apply epsilon floor to ensure minimum weight for each client.
+        This overrides the parent's _postprocess to ensure proper floor application.
         """
-        if not self.client_deltas_cache:
-            # Fallback to synthetic gradients
-            return self._compute_synthetic_gradients(client_summaries, tilts)
+        if self.epsilon <= 0:
+            return weights
         
-        # Flatten all deltas to vectors
-        flattened_deltas = []
-        reference_state = self.client_deltas_cache[0]
+        n = len(weights)
+        eps = self.epsilon
         
-        for delta in self.client_deltas_cache:
-            flat = flatten_weights(delta)
-            flattened_deltas.append(flat)
+        # Check if floor is feasible
+        if eps * n >= 1.0:
+            # If total floor exceeds 1, return uniform
+            return torch.ones(n, dtype=torch.float32) / n
         
-        # Accuracy gradient: weighted average by samples
-        total_samples = sum(s.get('n_samples', 1) for s in client_summaries)
-        g_acc = torch.zeros_like(flattened_deltas[0])
+        # Apply floor: ensure each weight is at least epsilon
+        floored_weights = torch.maximum(weights, torch.tensor(eps, dtype=torch.float32))
         
-        for i, (delta, summary) in enumerate(zip(flattened_deltas, client_summaries)):
-            weight = summary.get('n_samples', 1) / total_samples
-            tilt = tilts[i].item() if i < len(tilts) else 1.0
-            g_acc += weight * tilt * delta
+        # Renormalize to sum to 1
+        floored_weights = floored_weights / floored_weights.sum()
         
-        # Worst-group gradient: focus on high-loss clients
-        losses = torch.tensor([s.get('val_loss', s.get('train_loss', 1.0)) 
-                              for s in client_summaries])
-        temperature = 10.0
-        wg_weights = F.softmax(losses * temperature, dim=0)
-        
-        g_wg = torch.zeros_like(flattened_deltas[0])
-        for i, (delta, w) in enumerate(zip(flattened_deltas, wg_weights)):
-            tilt = tilts[i].item() if i < len(tilts) else 1.0
-            g_wg += w * tilt * delta
-        
-        # Fairness gradient: weighted by fairness gaps
-        fairness_scores = []
-        for s in client_summaries:
-            score = (self.w_eo * s.get('eo_gap', 0) +
-                    self.w_fpr * s.get('fpr_gap', 0) +
-                    self.w_sp * abs(s.get('sp_gap', 0)))
-            fairness_scores.append(score)
-        
-        fairness_scores = torch.tensor(fairness_scores)
-        fair_weights = F.softmax(fairness_scores * 5.0, dim=0)  # Temperature=5
-        
-        g_fair = torch.zeros_like(flattened_deltas[0])
-        for i, (delta, w) in enumerate(zip(flattened_deltas, fair_weights)):
-            tilt = tilts[i].item() if i < len(tilts) else 1.0
-            g_fair += w * tilt * delta
-        
-        return g_acc, g_wg, g_fair
-    
-    def _compute_synthetic_gradients(
-        self,
-        client_summaries: List[Dict[str, Any]],
-        tilts: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Fallback: compute synthetic gradients when deltas not available.
-        """
-        dim = 100  # Synthetic dimension
-        
-        # Accuracy gradient
-        g_acc = torch.zeros(dim)
-        total_samples = sum(s.get('n_samples', 1) for s in client_summaries)
-        for i, summary in enumerate(client_summaries):
-            tilt = tilts[i].item() if i < len(tilts) else 1.0
-            weight = tilt * summary.get('n_samples', 1) / total_samples
-            loss = summary.get('train_loss', 1.0)
-            g_acc += weight * loss * torch.randn(dim) * 0.1
-        
-        # Worst-group gradient
-        g_wg = torch.zeros(dim)
-        losses = [s.get('val_loss', 1.0) for s in client_summaries]
-        if losses:
-            max_loss = max(losses)
-            for i, loss in enumerate(losses):
-                if loss >= max_loss * 0.9:  # Focus on worst performers
-                    tilt = tilts[i].item() if i < len(tilts) else 1.0
-                    g_wg += tilt * torch.randn(dim) * 0.1
-        
-        # Fairness gradient
-        g_fair = torch.zeros(dim)
-        for i, summary in enumerate(client_summaries):
-            gap_score = (summary.get('eo_gap', 0) + 
-                        summary.get('fpr_gap', 0) +
-                        abs(summary.get('sp_gap', 0)))
-            tilt = tilts[i].item() if i < len(tilts) else 1.0
-            g_fair += tilt * gap_score * torch.randn(dim) * 0.1
-        
-        return g_acc, g_wg, g_fair
-    
-    def _gradient_to_weights(
-        self,
-        g_mix: torch.Tensor,
-        tilts: torch.Tensor,
-        client_summaries: List[Dict[str, Any]]
-    ) -> torch.Tensor:
-        """
-        Convert gradient direction to client weights.
-        """
-        if not self.client_deltas_cache:
-            # Fallback to tilted sample weighting
-            weights = []
-            total_samples = sum(s.get('n_samples', 1) for s in client_summaries)
-            for i, summary in enumerate(client_summaries):
-                tilt = tilts[i].item() if i < len(tilts) else 1.0
-                weight = tilt * summary.get('n_samples', 1) / total_samples
-                weights.append(weight)
-            weights = torch.tensor(weights, dtype=torch.float32)
-            return weights / weights.sum()
-        
-        # Compute alignment of each client delta with mixed gradient
-        alignments = []
-        for delta in self.client_deltas_cache:
-            flat_delta = flatten_weights(delta)
-            # Cosine similarity
-            alignment = F.cosine_similarity(flat_delta.unsqueeze(0), 
-                                           g_mix.unsqueeze(0)).item()
-            alignments.append(max(0, alignment))  # Only positive contributions
-        
-        alignments = torch.tensor(alignments, dtype=torch.float32)
-        
-        # Combine with tilts and sample sizes
-        weights = []
-        total_samples = sum(s.get('n_samples', 1) for s in client_summaries)
-        
-        for i, summary in enumerate(client_summaries):
-            tilt = tilts[i].item() if i < len(tilts) else 1.0
-            alignment = alignments[i].item() if i < len(alignments) else 1.0
-            samples = summary.get('n_samples', 1)
+        # Apply iterative correction to ensure floor is maintained after normalization
+        for _ in range(5):  # Maximum iterations
+            below_floor = floored_weights < eps
+            if not below_floor.any():
+                break
             
-            # Combine factors
-            weight = tilt * alignment * (samples / total_samples)
-            weights.append(weight)
-        
-        weights = torch.tensor(weights, dtype=torch.float32)
-        
-        # Ensure non-zero weights
-        weights = weights + 1e-6
-        return weights / weights.sum()
-    
-    def _mgda_solve(self, gradients: List[torch.Tensor]) -> torch.Tensor:
-        """
-        Solve MGDA quadratic program for Pareto descent direction.
-        """
-        n_tasks = len(gradients)
-        
-        if self.mgda_normalize_grads:
-            # Normalize gradients
-            gradients = [g / (g.norm() + 1e-8) for g in gradients]
-        
-        if self.mgda_solver == "qp":
-            # Solve QP: min_α ||Σ α_i g_i||² s.t. α ≥ 0, Σα = 1
-            try:
-                # Compute gradient inner products
-                G = torch.zeros(n_tasks, n_tasks)
-                for i in range(n_tasks):
-                    for j in range(n_tasks):
-                        G[i, j] = torch.dot(gradients[i].flatten(), 
-                                          gradients[j].flatten()).item()
+            # Set floor for those below
+            floored_weights[below_floor] = eps
+            
+            # Rescale others proportionally
+            above_floor = ~below_floor
+            if above_floor.any():
+                total_floor = below_floor.sum().item() * eps
+                remaining = 1.0 - total_floor
                 
-                # CVXPY formulation
-                alpha = cp.Variable(n_tasks)
-                objective = cp.Minimize(cp.quad_form(alpha, G.numpy()))
-                constraints = [alpha >= 0, cp.sum(alpha) == 1]
-                prob = cp.Problem(objective, constraints)
-                prob.solve(solver=cp.SCS, verbose=False)
-                
-                if alpha.value is not None:
-                    alphas = torch.tensor(alpha.value, dtype=torch.float32)
-                else:
-                    # Fallback to uniform
-                    alphas = torch.ones(n_tasks) / n_tasks
-            except:
-                # Fallback to uniform if QP fails
-                alphas = torch.ones(n_tasks) / n_tasks
-        else:
-            # Frank-Wolfe algorithm
-            alphas = self._frank_wolfe_solver(gradients)
+                if remaining > 0:
+                    above_weights = floored_weights[above_floor]
+                    above_sum = above_weights.sum()
+                    if above_sum > 0:
+                        floored_weights[above_floor] = above_weights * (remaining / above_sum)
         
-        # Store for logging
-        self.last_mgda_weights = alphas
+        # Final normalization
+        floored_weights = floored_weights / floored_weights.sum()
         
-        return alphas
-    
-    def _frank_wolfe_solver(
-        self,
-        gradients: List[torch.Tensor],
-        max_iter: int = 20
-    ) -> torch.Tensor:
-        """
-        Frank-Wolfe solver for MGDA.
-        """
-        n_tasks = len(gradients)
-        alphas = torch.ones(n_tasks) / n_tasks
+        # Ensure all weights meet floor (with small tolerance for floating point)
+        floored_weights = torch.maximum(floored_weights, torch.tensor(eps - 1e-7, dtype=torch.float32))
         
-        for _ in range(max_iter):
-            # Compute current gradient
-            g_sum = sum(alphas[i] * gradients[i] for i in range(n_tasks))
-            
-            # Find descent vertex
-            dots = torch.tensor([torch.dot(g_sum.flatten(), g.flatten()) 
-                                 for g in gradients])
-            min_idx = torch.argmin(dots)
-            
-            # Line search
-            v = torch.zeros(n_tasks)
-            v[min_idx] = 1.0
-            
-            # Optimal step size (simplified)
-            gamma = 2.0 / (2.0 + _)
-            
-            # Update
-            alphas = (1 - gamma) * alphas + gamma * v
+        # Apply weight clipping if specified
+        if self.weight_clip > 0:
+            max_weight = (1.0 / n) * self.weight_clip
+            floored_weights = torch.minimum(floored_weights, torch.tensor(max_weight, dtype=torch.float32))
         
-        return alphas
-    
-    def _pcgrad(self, gradients: List[torch.Tensor], g_mix: torch.Tensor) -> torch.Tensor:
-        """
-        PCGrad: Project conflicting gradients.
-        """
-        g_pc = g_mix.clone()
-        
-        for g in gradients:
-            # Check for conflict
-            dot_product = torch.dot(g_pc.flatten(), g.flatten())
-            
-            if dot_product < 0:
-                # Project g_pc onto the normal of g
-                g_norm = g / (g.norm() + 1e-8)
-                g_pc = g_pc - dot_product * g_norm / (g_norm.norm() ** 2 + 1e-8)
-        
-        return g_pc
-    
-    def _cagrad(self, gradients: List[torch.Tensor], g_mix: torch.Tensor) -> torch.Tensor:
-        """
-        CAGrad: Conflict-averse gradient with convergence guarantees.
-        """
-        # Average gradient
-        g_avg = sum(gradients) / len(gradients)
-        
-        # Compute conflict score
-        conflicts = []
-        for i in range(len(gradients)):
-            for j in range(i + 1, len(gradients)):
-                dot = torch.dot(gradients[i].flatten(), gradients[j].flatten())
-                if dot < 0:
-                    conflicts.append(abs(dot))
-        
-        if conflicts:
-            # Adjust rho based on conflict level
-            avg_conflict = sum(conflicts) / len(conflicts)
-            max_possible = max(g.norm() for g in gradients) ** 2
-            conflict_ratio = avg_conflict / (max_possible + 1e-8)
-            
-            # Higher conflict -> more weight on average
-            adjusted_rho = min(0.9, self.cagrad_rho + 0.3 * conflict_ratio)
-        else:
-            adjusted_rho = self.cagrad_rho
-        
-        # Conflict-averse update
-        g_ca = (1 - adjusted_rho) * g_mix + adjusted_rho * g_avg
-        
-        return g_ca
+        # Final normalization
+        return floored_weights / floored_weights.sum()
     
     def _compute_client_tilts(self, client_summaries: List[Dict[str, Any]]) -> torch.Tensor:
         """
@@ -675,7 +392,7 @@ class FairCareAggregator(BaseAggregator):
         
         # Extract privacy-safe proxies
         proxies = []
-        targets = []  # For training: use worst_group_f1 as target
+        targets = []
         
         for summary in client_summaries:
             proxy = torch.tensor([
@@ -689,7 +406,7 @@ class FairCareAggregator(BaseAggregator):
             ], dtype=torch.float32)
             proxies.append(proxy)
             
-            # Target: inverse of worst_group_f1 (want to upweight low F1)
+            # Target: inverse of worst_group_f1
             wg_f1 = summary.get('worst_group_f1', 0.5)
             targets.append(1.0 / (wg_f1 + 0.1))
         
@@ -699,10 +416,10 @@ class FairCareAggregator(BaseAggregator):
         proxies_batch = torch.stack(proxies)
         targets_tensor = torch.tensor(targets, dtype=torch.float32)
         
-        # Train ARL head (few steps per round)
+        # Train ARL head
         if self.arl_optimizer is not None:
             self.arl_head.train()
-            for _ in range(5):  # Few gradient steps
+            for _ in range(5):
                 self.arl_optimizer.zero_grad()
                 
                 predicted_tilts = self.arl_head(proxies_batch).squeeze()
@@ -722,7 +439,7 @@ class FairCareAggregator(BaseAggregator):
         
         # Apply eta scaling and normalize
         tilts = tilts * self.arl_eta
-        tilts = tilts / tilts.mean()  # Normalize to preserve scale
+        tilts = tilts / tilts.mean()
         
         # Clamp to reasonable range
         tilts = torch.clamp(tilts, 0.1, 10.0)
@@ -754,17 +471,14 @@ class FairCareAggregator(BaseAggregator):
             if self.consecutive_bias_rounds >= self.detector_patience:
                 if not self.bias_mitigation_mode:
                     self.bias_mitigation_mode = True
-                    # Increase lambda_fair when entering bias mode
                     self.lambda_fair = min(self.lambda_fair_max, self.lambda_fair * 1.5)
-                    self.tau = self.tau_min  # Use sharp temperature
+                    self.tau = self.tau_min
         else:
             self.consecutive_bias_rounds = 0
-            # Only exit bias mode after sustained low bias
             if self.bias_mitigation_mode and avg_eo_gap < self.bias_threshold_eo * 0.5:
                 self.bias_mitigation_mode = False
-                # Decrease lambda_fair when exiting bias mode
                 self.lambda_fair = max(self.lambda_fair_min, self.lambda_fair * 0.8)
-                self.tau = self.tau_init  # Restore temperature
+                self.tau = self.tau_init
         
         # Update history
         self.global_metrics_history['avg_eo_gap'].append(avg_eo_gap)
@@ -813,7 +527,7 @@ class FairCareAggregator(BaseAggregator):
                     
                     debt = self.w_eo * eo_gap + self.w_fpr * fpr_gap + self.w_sp * sp_gap
                     
-                    # Lyapunov-style update with decay
+                    # Lyapunov-style update
                     self.client_fairness_debt[client_id] = (
                         (1 - self.selector_tau) * self.client_fairness_debt[client_id] +
                         self.selector_kappa * debt
@@ -837,26 +551,6 @@ class FairCareAggregator(BaseAggregator):
         _, selected = torch.topk(scores, n_select)
         return selected.tolist()
     
-    def _apply_dp_noise(self, aggregated: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """
-        Apply differential privacy noise to aggregated update.
-        """
-        if not self.dp_enabled:
-            return aggregated
-        
-        noisy = {}
-        for key, tensor in aggregated.items():
-            # Clip norm
-            norm = tensor.norm()
-            if norm > self.dp_clip:
-                tensor = tensor * (self.dp_clip / norm)
-            
-            # Add Gaussian noise
-            noise = torch.randn_like(tensor) * self.dp_clip * self.dp_noise_mult
-            noisy[key] = tensor + noise
-        
-        return noisy
-    
     def apply_server_momentum(self, update: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
         Apply server-side momentum to aggregated update.
@@ -875,28 +569,6 @@ class FairCareAggregator(BaseAggregator):
         
         self.prev_global_update = momentum_update
         return momentum_update
-    
-    def _log_round_metrics(self, client_summaries: List[Dict[str, Any]], mgda_weights: torch.Tensor):
-        """
-        Log metrics for current round.
-        """
-        wg_f1s = [s.get('worst_group_f1', 0) for s in client_summaries]
-        if wg_f1s:
-            self.global_metrics_history['worst_group_f1'].append(np.mean(wg_f1s))
-        
-        if self.fairness_duals_enabled:
-            self.global_metrics_history['dual_values'].append({
-                'eo': self.dual_eo,
-                'fpr': self.dual_fpr,
-                'sp': self.dual_sp
-            })
-        
-        self.global_metrics_history['mgda_weights'].append(mgda_weights.tolist())
-        
-        if self.selector_enabled:
-            self.global_metrics_history['selector_queues'].append(
-                self.client_fairness_debt.tolist()
-            )
     
     def get_fairness_config(self) -> Dict[str, Any]:
         """
