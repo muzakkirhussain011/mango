@@ -108,12 +108,16 @@ def main():
     # Load config
     if args.config:
         config = ExperimentConfig.from_yaml(args.config)
+        print(f"Config: {config}")
         # Override with CLI args
         config.update_from_args(args)
+        
     else:
         # Create config from args
         config = ExperimentConfig()
+        
         config.update_from_args(args)
+        print(f"In Else block, Config: {config}")
     
     # Update specific fields
     config.training.algo = args.algo
