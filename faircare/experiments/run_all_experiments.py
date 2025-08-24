@@ -30,7 +30,7 @@ RESULTS_SAVED_RE = re.compile(r"^\s*Results saved to:\s*(.+)\s*$")
 
 # Keep these in sync with run_experiments.py choices
 ALGOS = ["fedavg", "fedprox", "qffl", "afl", "fairfate", "faircare_fl", "fairfed"]
-DATASETS = ["adult", "heart", "synth_health", "mimic", "eicu"]
+DATASETS = ["adult", "synth_health", "mimic", "eicu"]
 
 def guess_device(auto_choice: str) -> str:
     if auto_choice != "auto":
