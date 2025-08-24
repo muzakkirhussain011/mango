@@ -11,6 +11,7 @@ import yaml
 from typing import Dict, List
 import traceback
 import time
+import sys
 
 from faircare.config import ExperimentConfig
 from faircare.core.trainer import run_experiment
@@ -27,145 +28,155 @@ def load_sweep_config(config_path: str) -> Dict:
 
 def get_dataset_dimensions(dataset_name: str, sensitive_attr: str = None) -> int:
     """Get the actual input dimensions for a dataset."""
-    from faircare.data import load_dataset
-    
-    # Load a small sample to get dimensions
-    if dataset_name == "adult":
-        # Load just to get dimensions
-        data = load_dataset("adult", sensitive_attribute=sensitive_attr)
-        return data["n_features"]
-    elif dataset_name == "heart":
-        return 13
-    elif dataset_name == "synth_health":
-        return 20
-    elif dataset_name in ["mimic", "eicu"]:
-        return 50
-    else:
-        return 30  # default
+    # Use cached dimensions to avoid loading datasets multiple times
+    dimensions_map = {
+        "adult": 14,  # From the logs we see it's 14 features
+        "heart": 13,
+        "synth_health": 20,
+        "mimic": 50,
+        "eicu": 50
+    }
+    return dimensions_map.get(dataset_name, 30)
 
 
-def generate_configs_from_sweep(sweep_config: Dict) -> List[ExperimentConfig]:
-    """Generate experiment configs from sweep specification."""
-    base_config = sweep_config.get("base", {})
-    param_grid = sweep_config.get("param_grid", {})
-    seeds = sweep_config.get("seeds", [0, 1, 2, 3, 4])
+def create_config_dict(base_config: Dict, param_values: Dict, seed: int) -> Dict:
+    """Create a serializable config dictionary."""
+    config_dict = {
+        "name": "",
+        "seed": seed,
+        "logdir": "",
+        "model": {
+            "model_type": "mlp",
+            "input_dim": 30,
+            "hidden_dims": [64, 32],
+            "output_dim": 1,
+            "dropout": 0.2,
+            "activation": "relu"
+        },
+        "data": {
+            "dataset": "adult",
+            "sensitive_attribute": "sex",
+            "n_clients": 10,
+            "partition": "dirichlet",
+            "alpha": 0.5,
+            "train_ratio": 0.8,
+            "val_ratio": 0.1,
+            "test_ratio": 0.1,
+            "batch_size": 32,
+            "seed": seed
+        },
+        "training": {
+            "algo": "fedavg",
+            "rounds": 20,
+            "local_epochs": 5,
+            "lr": 0.01,
+            "weight_decay": 0.0,
+            "momentum": 0.0,
+            "server_lr": 1.0,
+            "eval_every": 1,
+            "checkpoint_every": 5,
+            "early_stopping_rounds": None,
+            "device": "cpu"
+        },
+        "fairness": {
+            "alpha": 1.0,
+            "beta": 0.5,
+            "gamma": 0.5,
+            "delta": 0.1,
+            "delta_init": 0.2,
+            "delta_min": 0.01,
+            "tau": 1.0,
+            "tau_init": 1.0,
+            "tau_min": 0.1,
+            "tau_anneal": True,
+            "tau_anneal_rate": 0.95,
+            "mu": 0.9,
+            "mu_client": 0.9,
+            "theta_server": 0.8,
+            "lambda_fair": 0.1,
+            "lambda_fair_init": 0.1,
+            "lambda_fair_min": 0.01,
+            "lambda_fair_max": 2.0,
+            "lambda_adapt_rate": 1.2,
+            "bias_threshold_eo": 0.15,
+            "bias_threshold_fpr": 0.15,
+            "bias_threshold_sp": 0.10,
+            "thr_eo": 0.15,
+            "thr_fpr": 0.15,
+            "thr_sp": 0.10,
+            "w_eo": 1.0,
+            "w_fpr": 0.5,
+            "w_sp": 0.5,
+            "epsilon": 0.01,
+            "weight_clip": 10.0,
+            "enable_bias_detection": True,
+            "enable_server_momentum": True,
+            "enable_multi_metric": True,
+            "variance_penalty": 0.1,
+            "improvement_bonus": 0.1,
+            "participation_boost": 0.15,
+            "fairness_loss_type": "eo_sp_combined"
+        },
+        "secure_agg": {
+            "enabled": False,
+            "protocol": "additive_masking",
+            "precision": 16,
+            "modulus": 2**32
+        },
+        "algo": {
+            "fedprox_mu": 0.01,
+            "q": 2.0,
+            "q_eps": 1e-4,
+            "afl_lambda": 0.1,
+            "afl_smoothing": 0.01,
+            "faircare_momentum": 0.9,
+            "faircare_anneal_rounds": 5,
+            "convergence_threshold": 0.01,
+            "bias_mitigation_extra_epochs": 1,
+            "bias_mitigation_lr_multiplier": 1.2
+        }
+    }
     
-    configs = []
+    # Update with base config
+    for key, value in base_config.items():
+        if isinstance(value, dict) and key in config_dict:
+            config_dict[key].update(value)
+        else:
+            config_dict[key] = value
     
-    if param_grid:
-        # Extract parameter names and values
-        param_names = list(param_grid.keys())
-        param_values = [param_grid[name] for name in param_names]
-        
-        # Generate all combinations
-        for values in itertools.product(*param_values):
-            # Create config dict
-            config_dict = base_config.copy()
-            
-            for name, value in zip(param_names, values):
-                # Handle nested parameters
-                if "." in name:
-                    parts = name.split(".")
-                    current = config_dict
-                    for part in parts[:-1]:
-                        if part not in current:
-                            current[part] = {}
-                        current = current[part]
-                    current[parts[-1]] = value
-                else:
-                    config_dict[name] = value
-            
-            # Create config object
-            config = ExperimentConfig()
-            
-            # Update model config
-            if "model" in config_dict:
-                for key, val in config_dict["model"].items():
-                    setattr(config.model, key, val)
-            
-            # Update data config
-            if "data" in config_dict:
-                for key, val in config_dict["data"].items():
-                    setattr(config.data, key, val)
-            
-            # Update training config
-            if "training" in config_dict:
-                for key, val in config_dict["training"].items():
-                    setattr(config.training, key, val)
-            
-            # Update fairness config
-            if "fairness" in config_dict:
-                for key, val in config_dict["fairness"].items():
-                    setattr(config.fairness, key, val)
-            
-            # Update algo-specific config
-            if "algo" in config_dict:
-                for key, val in config_dict["algo"].items():
-                    setattr(config.algo, key, val)
-            
-            # Update secure aggregation config
-            if "secure_agg" in config_dict:
-                for key, val in config_dict["secure_agg"].items():
-                    setattr(config.secure_agg, key, val)
-            
-            # Get actual dataset dimensions
-            dataset = config.data.dataset
-            sensitive = config.data.sensitive_attribute
-            actual_dim = get_dataset_dimensions(dataset, sensitive)
-            config.model.input_dim = actual_dim
-            
-            # Add each seed as a separate config
-            for seed in seeds:
-                seed_config = ExperimentConfig()
-                
-                # Deep copy all attributes
-                seed_config.model.input_dim = config.model.input_dim
-                seed_config.model.hidden_dims = config.model.hidden_dims.copy() if hasattr(config.model, 'hidden_dims') else [64, 32]
-                seed_config.model.output_dim = config.model.output_dim
-                seed_config.model.dropout = config.model.dropout
-                
-                seed_config.data.dataset = config.data.dataset
-                seed_config.data.sensitive_attribute = config.data.sensitive_attribute
-                seed_config.data.n_clients = config.data.n_clients
-                seed_config.data.partition = config.data.partition
-                seed_config.data.alpha = config.data.alpha
-                seed_config.data.batch_size = config.data.batch_size
-                
-                seed_config.training.algo = config.training.algo
-                seed_config.training.rounds = config.training.rounds
-                seed_config.training.local_epochs = config.training.local_epochs
-                seed_config.training.lr = config.training.lr
-                seed_config.training.weight_decay = config.training.weight_decay
-                seed_config.training.eval_every = config.training.eval_every
-                seed_config.training.checkpoint_every = config.training.checkpoint_every
-                seed_config.training.device = config.training.device
-                
-                # Copy fairness parameters
-                for attr in dir(config.fairness):
-                    if not attr.startswith('_'):
-                        setattr(seed_config.fairness, attr, getattr(config.fairness, attr))
-                
-                # Copy algo parameters
-                for attr in dir(config.algo):
-                    if not attr.startswith('_'):
-                        setattr(seed_config.algo, attr, getattr(config.algo, attr))
-                
-                # Set seed and naming
-                seed_config.seed = seed
-                seed_config.data.seed = seed
-                algo = seed_config.training.algo
-                dataset = seed_config.data.dataset
-                seed_config.name = f"{algo}_{dataset}_seed{seed}"
-                seed_config.logdir = f"runs/sweep/{algo}/{dataset}/seed{seed}"
-                
-                configs.append(seed_config)
+    # Update with parameter values
+    for key, value in param_values.items():
+        if "." in key:
+            parts = key.split(".")
+            current = config_dict
+            for part in parts[:-1]:
+                if part not in current:
+                    current[part] = {}
+                current = current[part]
+            current[parts[-1]] = value
+        else:
+            config_dict[key] = value
     
-    return configs
+    # Set specific values
+    algo = config_dict["training"]["algo"]
+    dataset = config_dict["data"]["dataset"]
+    config_dict["name"] = f"{algo}_{dataset}_seed{seed}"
+    config_dict["logdir"] = f"runs/sweep/{algo}/{dataset}/seed{seed}"
+    config_dict["data"]["seed"] = seed
+    
+    # Get actual dataset dimensions
+    actual_dim = get_dataset_dimensions(dataset, config_dict["data"].get("sensitive_attribute"))
+    config_dict["model"]["input_dim"] = actual_dim
+    
+    return config_dict
 
 
-def run_single_experiment(config: ExperimentConfig) -> Dict:
-    """Run a single experiment with error handling."""
+def run_single_experiment_wrapper(config_dict: Dict) -> Dict:
+    """Wrapper to run a single experiment from a config dictionary."""
     try:
+        # Create ExperimentConfig from dictionary
+        config = ExperimentConfig.from_dict(config_dict)
+        
         print(f"Starting: {config.name}")
         print(f"  Algorithm: {config.training.algo}")
         print(f"  Dataset: {config.data.dataset}")
@@ -190,19 +201,44 @@ def run_single_experiment(config: ExperimentConfig) -> Dict:
         return results
         
     except Exception as e:
-        print(f"Failed: {config.name}")
+        print(f"Failed: {config_dict.get('name', 'unknown')}")
         print(f"Error: {str(e)}")
         traceback.print_exc()
         
         return {
             "error": str(e),
-            "experiment_name": config.name,
-            "algorithm": config.training.algo,
-            "dataset": config.data.dataset,
-            "seed": config.seed,
-            "config": config.to_dict(),
-            "final_metrics": {}  # Empty metrics for failed experiments
+            "experiment_name": config_dict.get("name", "unknown"),
+            "algorithm": config_dict.get("training", {}).get("algo", "unknown"),
+            "dataset": config_dict.get("data", {}).get("dataset", "unknown"),
+            "seed": config_dict.get("seed", -1),
+            "config": config_dict,
+            "final_metrics": {}
         }
+
+
+def generate_config_dicts_from_sweep(sweep_config: Dict) -> List[Dict]:
+    """Generate serializable config dictionaries from sweep specification."""
+    base_config = sweep_config.get("base", {})
+    param_grid = sweep_config.get("param_grid", {})
+    seeds = sweep_config.get("seeds", [0, 1, 2, 3, 4])
+    
+    config_dicts = []
+    
+    if param_grid:
+        # Extract parameter names and values
+        param_names = list(param_grid.keys())
+        param_values = [param_grid[name] for name in param_names]
+        
+        # Generate all combinations
+        for values in itertools.product(*param_values):
+            param_dict = dict(zip(param_names, values))
+            
+            # Create config for each seed
+            for seed in seeds:
+                config_dict = create_config_dict(base_config, param_dict, seed)
+                config_dicts.append(config_dict)
+    
+    return config_dicts
 
 
 def aggregate_results(all_results: List[Dict]) -> Dict[str, Dict[str, List[Dict]]]:
@@ -352,7 +388,7 @@ def main():
         "--n_workers",
         type=int,
         default=1,
-        help="Number of parallel workers (1 for sequential)"
+        help="Number of parallel workers (use 1 for sequential to avoid pickling issues)"
     )
     parser.add_argument(
         "--output_dir",
@@ -388,10 +424,10 @@ def main():
         sweep_config["param_grid"]["data.dataset"] = args.datasets
         print(f"Testing datasets: {args.datasets}")
     
-    # Generate experiment configs
-    configs = generate_configs_from_sweep(sweep_config)
+    # Generate experiment config dictionaries
+    config_dicts = generate_config_dicts_from_sweep(sweep_config)
     
-    total_experiments = len(configs)
+    total_experiments = len(config_dicts)
     print(f"\n📋 Generated {total_experiments} experiment configurations")
     print(f"   Algorithms: {sweep_config['param_grid'].get('training.algo', [])}")
     print(f"   Datasets: {sweep_config['param_grid'].get('data.dataset', [])}")
@@ -399,30 +435,34 @@ def main():
     print(f"   Rounds: {sweep_config['base']['training']['rounds']}")
     print(f"   Local epochs: {sweep_config['base']['training']['local_epochs']}")
     
-    # Confirm before running
-    print(f"\nThis will run {total_experiments} experiments.")
-    response = input("Continue? (y/n): ")
-    if response.lower() != 'y':
-        print("Aborted.")
-        return
-    
     # Start timer
     start_time = time.time()
     
     # Run experiments
-    print(f"\n🚀 Starting experiments with {args.n_workers} worker(s)...")
+    print(f"\n🚀 Starting {total_experiments} experiments...")
     
     if args.n_workers > 1:
-        # Parallel execution
+        print(f"Using {args.n_workers} parallel workers")
+        # Use spawn method to avoid pickling issues
+        mp.set_start_method('spawn', force=True)
+        
         with mp.Pool(args.n_workers) as pool:
-            all_results = pool.map(run_single_experiment, configs)
+            all_results = pool.map(run_single_experiment_wrapper, config_dicts)
     else:
-        # Sequential execution
+        print("Running sequentially (recommended to avoid multiprocessing issues)")
         all_results = []
-        for i, config in enumerate(configs, 1):
+        for i, config_dict in enumerate(config_dicts, 1):
             print(f"\n[{i}/{total_experiments}] ", end="")
-            result = run_single_experiment(config)
+            result = run_single_experiment_wrapper(config_dict)
             all_results.append(result)
+            
+            # Print progress
+            if i % 5 == 0:
+                elapsed = time.time() - start_time
+                rate = i / elapsed
+                remaining = (total_experiments - i) / rate if rate > 0 else 0
+                print(f"\n⏱️  Progress: {i}/{total_experiments} completed. "
+                      f"Est. remaining: {int(remaining//60)}m {int(remaining%60)}s")
     
     # Aggregate results
     print("\n📈 Aggregating results...")
