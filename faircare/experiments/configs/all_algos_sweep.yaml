@@ -1,0 +1,137 @@
+# faircare/experiments/configs/all_algos_sweep.yaml
+# Comprehensive sweep configuration for all algorithms across all datasets
+# Testing with 20 rounds and 5 local epochs as requested
+
+base:
+  # Model configuration
+  model:
+    model_type: "mlp"
+    hidden_dims: [64, 32]
+    output_dim: 1
+    dropout: 0.2
+    activation: "relu"
+  
+  # Data configuration
+  data:
+    sensitive_attribute: "sex"  # Will be dataset-specific
+    n_clients: 10
+    partition: "dirichlet"
+    alpha: 0.5  # Dirichlet concentration (0.5 = moderate non-IID)
+    train_ratio: 0.8
+    val_ratio: 0.1
+    test_ratio: 0.1
+    batch_size: 32
+    seed: 42
+  
+  # Training configuration (as requested)
+  training:
+    rounds: 20  # As requested
+    local_epochs: 5  # As requested
+    lr: 0.01
+    weight_decay: 0.0
+    momentum: 0.0
+    server_lr: 1.0
+    eval_every: 1
+    checkpoint_every: 5
+    device: "cpu"  # Change to "cuda" if GPU available
+  
+  # Fairness configuration (default values)
+  fairness:
+    # Core fairness weights
+    alpha: 1.0          # EO gap weight
+    beta: 0.5           # FPR gap weight
+    gamma: 0.5          # SP gap weight
+    delta: 0.1          # Accuracy weight
+    
+    # Temperature parameters
+    tau: 1.0
+    tau_init: 1.0
+    tau_min: 0.1
+    tau_anneal: true
+    tau_anneal_rate: 0.95
+    
+    # Fairness penalty
+    lambda_fair: 0.1
+    lambda_fair_init: 0.1
+    lambda_fair_min: 0.01
+    lambda_fair_max: 2.0
+    lambda_adapt_rate: 1.2
+    
+    # Bias detection thresholds
+    bias_threshold_eo: 0.15
+    bias_threshold_fpr: 0.15
+    bias_threshold_sp: 0.10
+    detector_patience: 2
+    
+    # Client fairness weights
+    w_eo: 1.0
+    w_fpr: 0.5
+    w_sp: 0.5
+    
+    # Weight constraints
+    epsilon: 0.01
+    weight_clip: 10.0
+    
+    # Momentum
+    mu: 0.9
+    mu_client: 0.9
+    theta_server: 0.8
+    server_momentum: 0.8
+    
+    # Advanced features (for faircare_fl)
+    enable_bias_detection: true
+    enable_server_momentum: true
+    enable_multi_metric: true
+    variance_penalty: 0.1
+    improvement_bonus: 0.1
+    participation_boost: 0.15
+    fairness_loss_type: "eo_sp_combined"
+  
+  # Algorithm-specific parameters
+  algo:
+    # FedProx
+    fedprox_mu: 0.01
+    
+    # q-FFL
+    q: 2.0
+    q_eps: 0.0001
+    
+    # AFL
+    afl_lambda: 0.1
+    afl_smoothing: 0.01
+    
+    # FairCare-FL specific
+    faircare_momentum: 0.9
+    faircare_anneal_rounds: 5
+    convergence_threshold: 0.01
+    bias_mitigation_extra_epochs: 1
+    bias_mitigation_lr_multiplier: 1.2
+  
+  # Secure aggregation (disabled for speed)
+  secure_agg:
+    enabled: false
+    protocol: "additive_masking"
+    precision: 16
+
+# Parameter grid for sweep
+param_grid:
+  # Test all algorithms
+  training.algo: 
+    - "fedavg"
+    - "fedprox"
+    - "qffl"
+    - "afl"
+    - "fairfate"
+    - "faircare_fl"  # This includes the fairfed implementation
+  
+  # Test all datasets
+  data.dataset:
+    - "adult"
+    - "heart"
+    - "synth_health"
+    # Skip MIMIC/eICU as they're stubs and would use synthetic data anyway
+
+# Seeds for multiple runs (statistical significance)
+seeds: [0, 1, 2, 3, 4]
+
+# Total experiments = 6 algorithms × 3 datasets × 5 seeds = 90 experiments
