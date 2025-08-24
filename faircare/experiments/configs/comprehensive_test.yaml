@@ -1,152 +1,88 @@
-# faircare/experiments/configs/comprehensive_test.yaml
-# FairCare-FL v2.0 Comprehensive Performance Test Configuration
+experiment_name: "comprehensive_test_faircare_fl"
+save_dir: "results/comprehensive_test"
+seeds: [13, 42, 123]
 
-base:
-  model:
-    model_type: "mlp"
-    hidden_dims: [64, 32]
-    output_dim: 1
-    dropout: 0.2
-    activation: "relu"
-  
-  data:
-    dataset: "adult"
-    sensitive_attribute: "sex"
-    n_clients: 10
-    partition: "dirichlet"
-    alpha: 0.3
-    train_ratio: 0.7
-    val_ratio: 0.15
-    test_ratio: 0.15
-    batch_size: 32
-    seed: 42
-  
-  training:
-    algo: "faircare_fl"
-    rounds: 50
-    local_epochs: 5
-    lr: 0.03
-    weight_decay: 0.0001
-    momentum: 0.0
-    server_lr: 1.0
-    eval_every: 1
-    checkpoint_every: 10
-    device: "cpu"
-  
-  fairness:
+datasets:
+  - name: "mimic"
+    task: "mortality"
+    sensitive_attr: "race"
+    preprocessing: { normalize: true, impute: "median" }
+    split: { train_val_test: [0.8, 0.1, 0.1] }
+    heterogeneity: { dirichlet_alpha: 0.3, num_clients: 40 }
+
+  - name: "eicu"
+    task: "mortality"
+    sensitive_attr: "sex"
+    preprocessing: { normalize: true, impute: "median" }
+    split: { train_val_test: [0.8, 0.1, 0.1] }
+    heterogeneity: { dirichlet_alpha: 0.3, num_clients: 40 }
+
+client_participation:
+  scheme: "fraction"
+  client_fraction: [0.3]
+  min_clients_per_round: 10
+
+trainer:
+  rounds: [200]
+  local_epochs: [2]
+  batch_size: [128]
+  optimizer: "adam"
+  lr: [0.001]
+  weight_decay: [0.0]
+  scheduler: "cosine"
+  grad_clip: 5.0
+  early_stopping: { enabled: true, monitor: "val/worst_group_f1", mode: "max", patience_rounds: 20 }
+
+evaluation:
+  metrics: ["accuracy", "macro_f1", "worst_group_f1", "eo_gap", "fpr_gap", "sp_gap", "auroc"]
+  on_server_val: true
+  log_every: 1
+
+algorithms: ["faircare_fl"]
+
+algo_params:
+  faircare_fl:
     version: "2.0.0"
-    
-    # Client-side CALT parameters
-    prox_mu: 0.01
-    lambda_irm: 0.4
-    lambda_adv: 0.15
-    use_mixup: true
-    use_cia: true
-    
-    # Server-side PFA parameters
-    mgda_normalize_grads: true
-    mgda_solver: "qp"
-    mgda_step_size: 1.0
-    pcgrad_enabled: true
-    cagrad_enabled: true
-    cagrad_rho: 0.45
-    
-    # Fairness dual ascent
-    fairness_duals_enabled: true
-    epsilon_eo: 0.08
-    epsilon_fpr: 0.08
-    epsilon_sp: 0.06
-    dual_lr: 0.05
-    
-    # Demographics-free bias discovery
-    arl_enabled: true
-    arl_eta: 1.5
-    arl_width: 128
-    arl_depth: 2
-    arl_lr: 0.001
-    
-    # Fairness-aware client selection
-    selector_enabled: true
-    selector_mode: "lyapunov"
-    selector_tau: 0.015
-    selector_kappa: 0.6
-    
-    # Distillation (disabled for efficiency)
-    distill_enabled: false
-    distill_temperature: 2.0
-    distill_steps: 100
-    distill_batch_size: 64
-    
-    # Fairness metric weights
-    alpha: 1.8
-    beta: 1.0
-    gamma: 1.0
-    delta: 0.25
-    w_eo: 1.5
-    w_fpr: 0.8
-    w_sp: 0.8
-    
-    # Temperature annealing
-    tau: 1.5
-    tau_init: 1.5
-    tau_min: 0.15
-    
-    # Lambda fairness penalty
-    lambda_fair: 0.15
-    lambda_fair_init: 0.15
-    lambda_fair_min: 0.01
-    lambda_fair_max: 2.0
-    
-    # Server momentum
-    server_momentum: 0.85
-    
-    # Bias detection thresholds
-    bias_threshold_eo: 0.10
-    bias_threshold_fpr: 0.10
-    bias_threshold_sp: 0.07
-    detector_patience: 2
-    
-    # Weight constraints
-    epsilon: 0.015
-    weight_clip: 6.0
-    
-    # Privacy (disabled for max performance)
-    dp_enabled: false
-    dp_clip: 1.0
-    dp_noise_mult: 0.1
-  
-  algo:
-    # Legacy component parameters
-    qffl_q: 2.5
-    q_eps: 0.0001
-    afl_lambda: 0.12
-    afl_smoothing: 0.01
-    fedprox_mu: 0.01
-  
-  secure_agg:
-    enabled: false
-    protocol: "additive_masking"
 
-param_grid:
-  data.dataset: ["adult", "heart", "synth_health"]
-  data.sensitive_attribute: ["sex"]
-  training.algo: ["faircare_fl", "fedavg", "qffl", "afl"]
-  fairness.alpha: [1.5, 1.8, 2.0]
-  data.n_clients: [10, 15]
-  data.alpha: [0.1, 0.3, 0.5]
+    prox_mu: [0.0, 0.001]
+    lambda_irm: [0.25, 0.5]
+    lambda_adv: [0.1, 0.2]
+    use_mixup: [true]
+    use_cia: [true]
 
-seeds: [0, 1, 2, 3, 4]
+    server_momentum: [0.8]
+    mgda: { normalize_grads: true, solver: "qp", step_size: 1.0 }
+    pcgrad: { enabled: true }
+    cagrad: { enabled: true, rho: [0.5, 0.7] }
 
-# Minimal test configuration for quick validation
-minimal_test:
-  base:
-    data:
-      dataset: "adult"
-      n_clients: 5
-    training:
-      rounds: 10
-      local_epochs: 1
-  param_grid:
-    data.dataset: ["adult"]
-    training.algo: ["faircare_fl", "fedavg"]
-  seeds: [0, 1]
+    fairness_duals: { enabled: true, epsilon_eo: [0.02], epsilon_fpr: [0.02], lr: 0.1 }
+
+    arl: { enabled: true, eta: [1.0, 2.0], width: 64, depth: 1 }
+
+    selector: { enabled: true, mode: "lyapunov", tau: [0.02], kappa: [0.5] }
+
+    distill: { enabled: true, temperature: [2.0], steps: [200], batch_size: [64] }
+
+    dp: { enabled: false, clip: 1.0, noise_mult: 0.6 }
+
+    delta_acc: [0.3]
+    tau: [0.7]
+    w_eo: [1.0]
+    w_fpr: [1.0]
+    w_sp: [0.5]
+    weight_floor: 0.001
+    weight_capx: 0.2
+
+sweep: { strategy: "grid", max_runs: null }
+
+logging:
+  backend: "stdout"
+  log_interval_rounds: 1
+  save_checkpoints: true
+  checkpoint_best_on: "val/worst_group_f1"
+
+defaults:
+  dataset_name: "mimic"
+  algorithm: "faircare_fl"
+  rounds: 200
+  local_epochs: 2
