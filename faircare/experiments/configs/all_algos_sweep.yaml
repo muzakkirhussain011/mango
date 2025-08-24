@@ -42,6 +42,8 @@ base:
     beta: 0.5           # FPR gap weight
     gamma: 0.5          # SP gap weight
     delta: 0.1          # Accuracy weight
+    delta_init: 0.2
+    delta_min: 0.01
     
     # Temperature parameters
     tau: 1.0
@@ -61,7 +63,9 @@ base:
     bias_threshold_eo: 0.15
     bias_threshold_fpr: 0.15
     bias_threshold_sp: 0.10
-    detector_patience: 2
+    thr_eo: 0.15
+    thr_fpr: 0.15
+    thr_sp: 0.10
     
     # Client fairness weights
     w_eo: 1.0
@@ -76,7 +80,6 @@ base:
     mu: 0.9
     mu_client: 0.9
     theta_server: 0.8
-    server_momentum: 0.8
     
     # Advanced features (for faircare_fl)
     enable_bias_detection: true
