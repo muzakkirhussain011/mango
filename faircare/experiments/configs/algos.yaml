@@ -1,114 +1,137 @@
-# faircare/experiments/configs/algos.yaml
-# Algorithm-specific configurations including FairCare-FL v2.0
+# Algorithm configurations for federated learning experiments
+# FairCare-FL v2.0.0 - Next-generation multi-objective fairness-aware federated learning
 
-fedavg:
-  training:
-    algo: "fedavg"
-  algo:
-    weighted: true
-
-fedprox:
-  training:
-    algo: "fedprox"
-  algo:
-    fedprox_mu: 0.01
-
-qffl:
-  training:
-    algo: "qffl"
-  algo:
+algorithms:
+  # Baseline algorithms for comparison
+  fedavg:
+    name: "Federated Averaging"
+    weighted_aggregation: true
+    
+  fedprox:
+    name: "Federated Proximal"
+    mu: 0.001
+    weighted_aggregation: true
+    
+  afl:
+    name: "Agnostic Federated Learning"
+    lambda_param: 0.1
+    weighted_aggregation: true
+    
+  qffl:
+    name: "q-Fair Federated Learning"
     q: 2.0
-    q_eps: 0.0001
-
-afl:
-  training:
-    algo: "afl"
-  algo:
-    afl_lambda: 0.1
-    afl_smoothing: 0.01
-
-fairfate:
-  training:
-    algo: "fairfate"
-  fairness:
-    alpha: 1.0
+    weighted_aggregation: true
+    
+  fairfed:
+    name: "FairFed"
     beta: 0.5
-    gamma: 0.5
-    delta: 0.1
-    tau: 1.0
-    epsilon: 0.01
-
-# FairCare-FL v2.0 with PFA + DFBD + CALT
-faircare_fl:
-  training:
-    algo: "faircare_fl"
-  fairness:
+    weighted_aggregation: true
+    
+  # Next-generation FairCare-FL with optimal configuration
+  faircare_fl:
+    name: "FairCare-FL v2.0"
     version: "2.0.0"
     
-    # Client-side CALT parameters
-    prox_mu: 0.0
-    lambda_irm: 0.5
-    lambda_adv: 0.2
-    use_mixup: true
-    use_cia: true
+    # Client-side CALT parameters (optimal values)
+    client:
+      prox_mu: 0.001  # FedProx regularization strength
+      lambda_irm: 0.5  # IRM penalty for invariance
+      lambda_adv: 0.2  # Adversarial debiasing strength
+      lambda_fair: 1.0  # Local fairness loss weight
+      use_mixup: true  # Enable Mixup augmentation
+      use_cia: true  # Enable Counterfactual Instance Augmentation
+      mixup_alpha: 0.4  # Mixup Beta distribution parameter
+      cia_alpha: 0.3  # CIA interpolation strength
+      adversary_hidden_dim: 128  # Adversary network hidden dimension
+      adversary_depth: 2  # Adversary network depth
+      grad_clip: 5.0  # Gradient clipping threshold
     
-    # Server-side PFA parameters
-    server_momentum: 0.8
-    mgda_normalize_grads: true
-    mgda_solver: "qp"
-    mgda_step_size: 1.0
-    pcgrad_enabled: true
-    cagrad_enabled: true
-    cagrad_rho: 0.5
+    # Server-side PFA parameters (optimal values)
+    server:
+      # Multi-objective optimization
+      server_momentum: 0.9  # High momentum for stability
+      mgda:
+        normalize_grads: true  # Normalize gradients before mixing
+        solver: "clarabel"  # QP solver (clarabel is more robust than scs)
+        step_size: 0.8  # MGDA step size
+      pcgrad:
+        enabled: true  # Enable PCGrad projection
+      cagrad:
+        enabled: true  # Enable CAGrad refinement
+        rho: 0.7  # Conflict aversion parameter
+      
+      # Fairness constraints (dual variables)
+      fairness_duals:
+        enabled: true  # Enable dual ascent for constraints
+        epsilon_eo: 0.015  # Equal Opportunity tolerance
+        epsilon_fpr: 0.015  # False Positive Rate tolerance
+        epsilon_sp: 0.02  # Statistical Parity tolerance
+        lr: 0.15  # Dual variable learning rate
+        max_lambda: 5.0  # Maximum dual variable value
+      
+      # Demographics-free bias detection (DFBD)
+      arl:
+        enabled: true  # Enable adaptive reweighting
+        eta: 2.0  # Tilt amplification factor
+        width: 128  # MLP hidden layer width
+        depth: 3  # MLP depth
+        learning_rate: 0.001  # MLP learning rate
+        dropout: 0.1  # Dropout rate for MLP
+      
+      # Fairness-aware client selection
+      selector:
+        enabled: true  # Enable fair selection
+        mode: "lyapunov"  # Selection mode (lyapunov or bandit)
+        tau: 0.015  # Performance threshold
+        kappa: 0.6  # Loss weight in debt calculation
+        decay: 0.9  # Historical debt decay factor
+      
+      # Knowledge distillation
+      distill:
+        enabled: true  # Enable server-side distillation
+        temperature: 3.0  # Distillation temperature
+        steps: 300  # Number of distillation steps
+        batch_size: 128  # Distillation batch size
+        learning_rate: 0.01  # Distillation learning rate
     
-    # Fairness dual ascent (optional constraints)
-    fairness_duals_enabled: true
-    epsilon_eo: 0.02
-    epsilon_fpr: 0.02
-    epsilon_sp: 0.02
-    dual_lr: 0.1
+    # Fairness weights (adaptive)
+    fairness:
+      w_eo: 1.2  # Equal Opportunity weight
+      w_fpr: 1.2  # False Positive Rate weight  
+      w_sp: 0.8  # Statistical Parity weight
+      adaptive: true  # Enable adaptive weight adjustment
+      gap_momentum: 0.95  # Momentum for historical gap tracking
     
-    # Demographics-free bias discovery (DFBD)
-    arl_enabled: true
-    arl_eta: 1.0
-    arl_width: 64
-    arl_depth: 1
+    # Aggregation parameters
+    aggregation:
+      weight_floor: 0.005  # Minimum client weight
+      weight_cap: 0.15  # Maximum client weight
+      tau: 0.5  # Temperature for log-sum-exp
+      delta_acc: 0.3  # Accuracy delta for base weights
     
-    # Fairness-aware client selection
-    selector_enabled: true
-    selector_mode: "lyapunov"
-    selector_tau: 0.02
-    selector_kappa: 0.5
+    # Privacy settings (optional)
+    privacy:
+      dp:
+        enabled: false  # Differential privacy
+        clip: 1.0  # Gradient clipping bound
+        noise_mult: 0.6  # Noise multiplier
+      sa:
+        enabled: false  # Secure aggregation
     
-    # Optional distillation
-    distill_enabled: false
-    distill_temperature: 2.0
-    distill_steps: 200
-    distill_batch_size: 64
-    
-    # Privacy settings (reuse repo toggles)
-    dp_enabled: false
-    dp_clip: 1.0
-    dp_noise_mult: 0.6
-    
-    # Legacy/compatibility parameters
-    gate_mode: "learned"
-    lambda_fair: 0.1
-    lambda_fair_init: 0.1
-    lambda_fair_min: 0.01
-    lambda_fair_max: 2.0
-    tau: 1.0
-    tau_init: 1.0
-    tau_min: 0.1
-    delta_acc: 0.2
-    delta_acc_init: 0.2
-    delta_acc_min: 0.01
-    
-    # Weight constraints
-    epsilon: 0.01
-    weight_clip: 10.0
-    
-    # Fairness metric weights (for legacy compatibility)
-    alpha: 1.0           # EO gap weight
-    beta: 0.5            # FPR gap weight  
-    gamma: 0.5           # SP gap weight
+    # Monitoring and logging
+    logging:
+      verbose: true  # Detailed logging
+      log_gradients: false  # Log gradient statistics
+      log_weights: true  # Log aggregation weights
+      log_fairness: true  # Log fairness metrics
+      save_interval: 10  # Save checkpoint every N rounds
+
+# Default hyperparameters for all algorithms
+defaults:
+  learning_rate: 0.001
+  local_epochs: 2
+  batch_size: 128
+  optimizer: "adam"
+  weight_decay: 0.0
+  scheduler: "cosine"
+  warmup_rounds: 5
