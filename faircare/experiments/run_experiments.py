@@ -190,14 +190,19 @@ class FederatedExperiment:
         
         if algo_name == 'faircare_fl':
             self.aggregator = FairCareFLAggregator(self.algo_config, self.device)
-        elif algo_name == 'fedavg':
+        elif algo_name in ['fedavg', 'qffl', 'afl', 'fairfate']:
+            # Use FedAvg aggregator for these algorithms
+            # They differ mainly in client training, not aggregation
             from faircare.algos.fedavg import FedAvgAggregator
             self.aggregator = FedAvgAggregator(self.algo_config, self.device)
         elif algo_name == 'fedprox':
             from faircare.algos.fedprox import FedProxAggregator
             self.aggregator = FedProxAggregator(self.algo_config, self.device)
         else:
-            raise ValueError(f"Unknown algorithm: {algo_name}")
+            # Fallback to FedAvg for unknown algorithms
+            self.logger.warning(f"Unknown algorithm '{algo_name}', using FedAvg aggregation")
+            from faircare.algos.fedavg import FedAvgAggregator
+            self.aggregator = FedAvgAggregator(self.algo_config, self.device)
         
         self.logger.info(f"Aggregator initialized: {algo_name}")
     
