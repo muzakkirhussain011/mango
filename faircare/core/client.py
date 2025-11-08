@@ -262,9 +262,29 @@ class FairCareClient:
     
     def _get_feature_dim(self) -> int:
         """Get the dimension of the feature representation."""
-        # This would depend on the model architecture
-        # For now, return a default value
-        return 256
+        # Get the actual output dimension from the model by checking the last layer
+        try:
+            # Find the last linear layer output dimension
+            last_layer = None
+            for name, module in self.model.named_modules():
+                if isinstance(module, nn.Linear):
+                    last_layer = module
+
+            if last_layer is not None:
+                feature_dim = last_layer.out_features
+            else:
+                # Fallback: infer from a dummy forward pass
+                first_param = next(self.model.parameters())
+                input_dim = first_param.shape[1] if len(first_param.shape) > 1 else 64
+                dummy_input = torch.randn(2, input_dim, device=self.device)
+                with torch.no_grad():
+                    dummy_output = self.model(dummy_input)
+                feature_dim = dummy_output.shape[-1] if dummy_output.dim() > 1 else 1
+        except:
+            # Fallback to reasonable default
+            feature_dim = 1
+
+        return max(feature_dim, 1)  # At least 1 for the adversary
     
     def _train_epoch(self, train_loader: DataLoader, optimizer: torch.optim.Optimizer,
                     adv_optimizer: Optional[torch.optim.Optimizer],
@@ -387,14 +407,19 @@ class FairCareClient:
     
     def _forward_with_features(self, data: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Forward pass returning both outputs and intermediate features."""
-        # This would depend on the model architecture
-        # For now, we'll assume the model returns both
+        # Get model outputs
         outputs = self.model(data)
-        
-        # Extract features (penultimate layer activations)
-        # This is a placeholder - actual implementation depends on model
-        features = outputs  # In practice, extract from intermediate layer
-        
+
+        # For the adversary, we need features that match its expected input dim
+        # Flatten outputs to create feature vector
+        if outputs.dim() == 1:
+            features = outputs.unsqueeze(1)  # Make it 2D: [batch, 1]
+        elif outputs.dim() == 2 and outputs.size(1) == 1:
+            features = outputs  # Already [batch, 1]
+        else:
+            # Multi-class: use logits as features
+            features = outputs
+
         return outputs, features
     
     def _mixup_augmentation(self, data: torch.Tensor, target: torch.Tensor,
