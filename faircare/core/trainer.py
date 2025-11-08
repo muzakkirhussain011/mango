@@ -202,5 +202,8 @@ def run_experiment(config: ExperimentConfig) -> Dict[str, Any]:
     
     logger.info("Experiment completed")
     logger.info(f"Results saved to: {results_path}")
-    
+
+    # Close logger to release file handles
+    logger.close()
+
     return results

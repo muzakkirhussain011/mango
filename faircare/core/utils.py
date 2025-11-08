@@ -134,22 +134,22 @@ class Logger:
         # Setup console logger
         self.logger = logging.getLogger(name)
         self.logger.setLevel(logging.INFO)
-        
+
         # File handler
-        fh = logging.FileHandler(self.log_file)
-        fh.setLevel(logging.INFO)
-        
+        self.file_handler = logging.FileHandler(self.log_file)
+        self.file_handler.setLevel(logging.INFO)
+
         # Console handler
-        ch = logging.StreamHandler()
-        ch.setLevel(logging.INFO)
-        
+        self.console_handler = logging.StreamHandler()
+        self.console_handler.setLevel(logging.INFO)
+
         # Formatter
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        fh.setFormatter(formatter)
-        ch.setFormatter(formatter)
-        
-        self.logger.addHandler(fh)
-        self.logger.addHandler(ch)
+        self.file_handler.setFormatter(formatter)
+        self.console_handler.setFormatter(formatter)
+
+        self.logger.addHandler(self.file_handler)
+        self.logger.addHandler(self.console_handler)
     
     def info(self, message: str) -> None:
         """Log info message."""
@@ -171,6 +171,15 @@ class Logger:
         config_file = self.logdir / "config.json"
         with open(config_file, "w") as f:
             json.dump(config, f, indent=2, default=str)
+
+    def close(self) -> None:
+        """Close all file handlers to release file locks."""
+        if hasattr(self, 'file_handler'):
+            self.file_handler.close()
+            self.logger.removeHandler(self.file_handler)
+        if hasattr(self, 'console_handler'):
+            self.console_handler.close()
+            self.logger.removeHandler(self.console_handler)
 
 
 def create_optimizer(

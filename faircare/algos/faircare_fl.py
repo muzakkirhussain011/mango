@@ -885,6 +885,9 @@ class FairCareFLWrapper(BaseAggregator):
                  bias_threshold_eo: float = 0.15,
                  bias_threshold_fpr: float = 0.15,
                  bias_threshold_sp: float = 0.1,
+                 alpha: float = 0.0,
+                 beta: float = 0.0,
+                 gamma: float = 0.0,
                  fairness_config: Optional[Any] = None,
                  **kwargs):
         """Initialize wrapper with BaseAggregator interface."""
@@ -900,6 +903,11 @@ class FairCareFLWrapper(BaseAggregator):
         self.bias_threshold_fpr = bias_threshold_fpr
         self.bias_threshold_sp = bias_threshold_sp
         self.bias_mitigation_mode = False
+
+        # Fairness weighting parameters
+        self.alpha = alpha  # Weight for EO gap
+        self.beta = beta    # Weight for FPR gap
+        self.gamma = gamma  # Weight for SP gap
 
         # Initialize gate network if using learned mode
         if gate_mode == "learned":
@@ -933,6 +941,29 @@ class FairCareFLWrapper(BaseAggregator):
         # Increment round counter
         self._round_counter += 1
 
+        # Check if using simple fairness-based weighting (alpha/beta/gamma mode)
+        use_fairness_weighting = (self.alpha != 0.0 or self.beta != 0.0 or self.gamma != 0.0)
+
+        if use_fairness_weighting:
+            # Simple fairness-based weighting: lower gaps get higher weights
+            fairness_scores = []
+            for summary in client_summaries:
+                score = (
+                    self.alpha * summary.get('eo_gap', 0.0) +
+                    self.beta * summary.get('fpr_gap', 0.0) +
+                    self.gamma * summary.get('sp_gap', 0.0)
+                )
+                fairness_scores.append(score)
+
+            # Convert to weights: inverse of fairness scores (lower gap = higher weight)
+            scores_tensor = torch.tensor(fairness_scores, dtype=torch.float32)
+            # Add small epsilon to avoid division by zero
+            weights = 1.0 / (scores_tensor + 1e-6)
+            weights = weights / weights.sum()
+
+            return self._postprocess(weights)
+
+        # Otherwise use FairCareFLAggregator logic
         # Convert client summaries to client reports format
         client_reports = []
         for summary in client_summaries:

@@ -169,6 +169,8 @@ class FairCareClient:
             'accuracy': report.get('accuracy', 0.0),
             'wg_f1': report.get('wg_f1', 0.0),
             'worst_group_F1': report.get('wg_f1', 0.0),
+            'fairness_loss': report.get('fairness_loss', 0.0),
+            'adversary_loss': report.get('adversary_loss', 0.0),
         }
 
         # Add fairness metrics if group_counts are available
@@ -228,25 +230,27 @@ class FairCareClient:
             adv_optimizer = torch.optim.Adam(self.adversary.parameters(), lr=learning_rate * 2)
         
         # Training loop
+        last_epoch_metrics = {}
         for epoch in range(local_epochs):
             epoch_metrics = self._train_epoch(
                 train_loader, optimizer, adv_optimizer,
                 global_weights, epoch, local_epochs
             )
             self.training_history.append(epoch_metrics)
-        
+            last_epoch_metrics = epoch_metrics
+
         # Compute validation metrics
         val_metrics = self._validate(val_loader)
-        
+
         # Compute model delta
         delta = self._compute_delta(initial_weights)
-        
+
         # Compute proxies for DFBD
         proxies = self._compute_proxies(val_metrics)
-        
+
         # Prepare comprehensive report
-        report = self._prepare_report(delta, val_metrics, proxies, len(train_loader.dataset))
-        
+        report = self._prepare_report(delta, val_metrics, proxies, len(train_loader.dataset), last_epoch_metrics)
+
         return report
     
     def _initialize_adversary(self):
@@ -352,25 +356,31 @@ class FairCareClient:
             loss_components['fair'] = self.lambda_fair * fair_loss
             
             # 5. Adversarial debiasing loss
+            adv_loss_value = 0.0
             if self.adversary and self.lambda_adv > 0:
                 # Adaptive lambda based on epoch
                 adaptive_lambda = self.lambda_adv * min(1.0, epoch / (total_epochs / 2))
-                
-                adv_predictions = self.adversary(features, adaptive_lambda)
+
+                adv_predictions = self.adversary(features.detach(), adaptive_lambda)
                 adv_loss = F.cross_entropy(adv_predictions, sensitive_attr)
-                loss_components['adv'] = -adaptive_lambda * adv_loss
-                
-                # Train adversary
+
+                # Train adversary separately (don't include in main backward pass)
                 if adv_optimizer:
                     adv_optimizer.zero_grad()
-                    adv_loss.backward(retain_graph=True)
+                    adv_loss.backward()
                     adv_optimizer.step()
+
+                adv_loss_value = adv_loss.item()
+                # For the main model, we want to fool the adversary
+                # Re-compute with non-detached features for gradient flow to main model
+                adv_predictions_main = self.adversary(features, adaptive_lambda)
+                loss_components['adv'] = -adaptive_lambda * F.cross_entropy(adv_predictions_main, sensitive_attr)
             else:
-                loss_components['adv'] = torch.tensor(0.0)
-            
+                loss_components['adv'] = torch.tensor(0.0, device=self.device)
+
             # Combined loss
             total_batch_loss = sum(loss_components.values())
-            
+
             # Backward pass
             total_batch_loss.backward()
             
@@ -778,7 +788,8 @@ class FairCareClient:
     def _prepare_report(self, delta: Dict[str, torch.Tensor],
                        val_metrics: Dict[str, Any],
                        proxies: Dict[str, float],
-                       n_samples: int) -> Dict[str, Any]:
+                       n_samples: int,
+                       last_epoch_metrics: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         """Prepare comprehensive client report."""
         # Convert group stats to the expected format
         group_counts = {}
@@ -789,7 +800,7 @@ class FairCareClient:
                 'TN': stats['TN'],
                 'FN': stats['FN']
             }
-        
+
         report = {
             'client_id': self.client_id,
             'delta': delta,
@@ -800,7 +811,12 @@ class FairCareClient:
             'wg_f1': val_metrics['wg_f1'],
             'accuracy': val_metrics['accuracy']
         }
-        
+
+        # Add training metrics from last epoch if available
+        if last_epoch_metrics:
+            report['fairness_loss'] = last_epoch_metrics.get('fair_loss', 0.0)
+            report['adversary_loss'] = last_epoch_metrics.get('adv_loss', 0.0)
+
         return report
 
 
