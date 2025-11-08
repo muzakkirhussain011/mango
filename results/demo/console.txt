@@ -1,0 +1,90 @@
+2025-11-08 20:11:28,088 - faircare_fl_demo - INFO - Starting FairCare-FL++ experiment: faircare_fl_demo
+2025-11-08 20:11:28,088 - faircare_fl_demo - INFO - Algorithm: faircare_fl
+2025-11-08 20:11:29,354 - faircare_fl_demo - INFO - Updating model input dimension from 10 to 20
+2025-11-08 20:11:29,728 - faircare_fl_demo - INFO - ============================================================
+2025-11-08 20:11:29,728 - faircare_fl_demo - INFO - FairCare-FL++ Configuration:
+2025-11-08 20:11:29,737 - faircare_fl_demo - INFO -   Momentum: client=0.0, server=0.9
+2025-11-08 20:11:29,737 - faircare_fl_demo - INFO -   Bias thresholds: EO=0.15, FPR=0.15, SP=0.1
+2025-11-08 20:11:29,737 - faircare_fl_demo - INFO -   Bias detection: True
+2025-11-08 20:11:29,812 - faircare_fl_demo - INFO -   Multi-metric fairness: True
+2025-11-08 20:11:29,821 - faircare_fl_demo - INFO - ============================================================
+2025-11-08 20:11:30,113 - faircare_fl_demo - INFO - Starting federated training...
+2025-11-08 20:11:30,115 - faircare_fl_demo - INFO - Starting federated training
+2025-11-08 20:11:30,115 - faircare_fl_demo - INFO - Total rounds: 25
+2025-11-08 20:11:30,115 - faircare_fl_demo - INFO - Clients per round: 4
+2025-11-08 20:11:30,115 - faircare_fl_demo - INFO - Algorithm: FairCareFLWrapper
+2025-11-08 20:11:30,833 - faircare_fl_demo - INFO - Initial - Val: {'val_loss': 0.6995635032653809, 'val_accuracy': 0.48661567877629064, 'val_EO_gap': 0.0870909284724443, 'val_FPR_gap': 0.09327107937379842, 'val_SP_gap': 0.10063519011796387, 'val_max_group_gap': 0.10063519011796387, 'val_macro_F1': 0.1851865948579367, 'val_worst_group_F1': 0.1497326203208556, 'val_g0_TPR': 0.0880503144654088, 'val_g0_FPR': 0.12727272727272726, 'val_g0_PPR': 0.10408921933085502, 'val_g0_Precision': 0.5, 'val_g0_Recall': 0.0880503144654088, 'val_g1_TPR': 0.1751412429378531, 'val_g1_FPR': 0.22054380664652568, 'val_g1_PPR': 0.2047244094488189, 'val_g1_Precision': 0.2980769230769231, 'val_g1_Recall': 0.1751412429378531, 'val_group_stats': {'group_0': {'TP': 28, 'FP': 28, 'FN': 290, 'TN': 192, 'N': 538}, 'group_1': {'TP': 31, 'FP': 73, 'FN': 146, 'TN': 258, 'N': 508}}}
+2025-11-08 20:11:30,833 - faircare_fl_demo - INFO - Initial - Test: {'test_loss': 0.7009646892547607, 'test_accuracy': 0.476, 'test_EO_gap': 0.03436028897692846, 'test_FPR_gap': 0.02429971988795518, 'test_SP_gap': 0.048493644279851866, 'test_max_group_gap': 0.048493644279851866, 'test_macro_F1': 0.16148186088017172, 'test_worst_group_F1': 0.15405777166437415, 'test_g0_TPR': 0.09135399673735727, 'test_g0_FPR': 0.16246498599439776, 'test_g0_PPR': 0.11752577319587629, 'test_g0_Precision': 0.49122807017543857, 'test_g0_Recall': 0.09135399673735727, 'test_g1_TPR': 0.12571428571428572, 'test_g1_FPR': 0.18676470588235294, 'test_g1_PPR': 0.16601941747572815, 'test_g1_Precision': 0.2573099415204678, 'test_g1_Recall': 0.12571428571428572, 'test_group_stats': {'group_0': {'TP': 56, 'FP': 58, 'FN': 557, 'TN': 299, 'N': 970}, 'group_1': {'TP': 44, 'FP': 127, 'FN': 306, 'TN': 553, 'N': 1030}}}
+2025-11-08 20:11:30,841 - faircare_fl_demo - INFO - Round 1: Selected clients [8, 2, 5, 6]
+2025-11-08 20:11:36,114 - faircare_fl_demo - INFO - Round 1 - Train Loss: 0.4795, Val Acc: 0.5268, Val EO Gap: 0.0000, Val Worst F1: 0.0000
+2025-11-08 20:11:36,116 - faircare_fl_demo - INFO - Round 2: Selected clients [9, 4, 1, 5]
+2025-11-08 20:11:38,018 - faircare_fl_demo - INFO - Round 2 - Train Loss: 0.4213, Val Acc: 0.6147, Val EO Gap: 0.0174, Val Worst F1: 0.5948
+2025-11-08 20:11:38,020 - faircare_fl_demo - INFO - Round 3: Selected clients [7, 6, 2, 8]
+2025-11-08 20:11:39,351 - faircare_fl_demo - INFO - Round 3 - Train Loss: 0.4511, Val Acc: 0.5268, Val EO Gap: 0.0000, Val Worst F1: 0.0000
+2025-11-08 20:11:39,353 - faircare_fl_demo - INFO - Round 4: Selected clients [3, 4, 5, 7]
+2025-11-08 20:11:41,734 - faircare_fl_demo - INFO - Round 4 - Train Loss: 0.3715, Val Acc: 0.6740, Val EO Gap: 0.0167, Val Worst F1: 0.6281
+2025-11-08 20:11:41,734 - faircare_fl_demo - INFO - Round 5: Selected clients [9, 3, 5, 2]
+2025-11-08 20:11:43,079 - faircare_fl_demo - INFO - Aggregator stats: {'round': 5, 'bias_mitigation_mode': False, 'gate_mode': 'heuristic', 'lambda_fair': 0.1, 'tau': 1.0, 'lambda_eo': 0.0, 'lambda_fpr': 0.0, 'lambda_sp': 0.0}
+2025-11-08 20:11:43,079 - faircare_fl_demo - INFO - Round 5 - Train Loss: 0.4718, Val Acc: 0.5507, Val EO Gap: 0.0610, Val Worst F1: 0.0223
+2025-11-08 20:11:43,079 - faircare_fl_demo - INFO - Round 6: Selected clients [9, 8, 1, 7]
+2025-11-08 20:11:44,157 - faircare_fl_demo - INFO - Round 6 - Train Loss: 0.3592, Val Acc: 0.5268, Val EO Gap: 0.0000, Val Worst F1: 0.0000
+2025-11-08 20:11:44,158 - faircare_fl_demo - INFO - Round 7: Selected clients [0, 3, 8, 1]
+2025-11-08 20:11:46,274 - faircare_fl_demo - INFO - Round 7 - Train Loss: 0.3586, Val Acc: 0.5306, Val EO Gap: 0.0126, Val Worst F1: 0.0000
+2025-11-08 20:11:46,274 - faircare_fl_demo - INFO - Round 8: Selected clients [2, 9, 7, 4]
+2025-11-08 20:11:47,838 - faircare_fl_demo - INFO - Round 8 - Train Loss: 0.5381, Val Acc: 0.4732, Val EO Gap: 0.0000, Val Worst F1: 0.5168
+2025-11-08 20:11:47,860 - faircare_fl_demo - INFO - Round 9: Selected clients [2, 9, 5, 8]
+2025-11-08 20:11:49,330 - faircare_fl_demo - INFO - Round 9 - Train Loss: 0.4543, Val Acc: 0.5268, Val EO Gap: 0.0000, Val Worst F1: 0.0000
+2025-11-08 20:11:49,334 - faircare_fl_demo - INFO - Round 10: Selected clients [6, 9, 2, 5]
+2025-11-08 20:11:51,354 - faircare_fl_demo - INFO - Aggregator stats: {'round': 10, 'bias_mitigation_mode': False, 'gate_mode': 'heuristic', 'lambda_fair': 0.1, 'tau': 1.0, 'lambda_eo': 0.0, 'lambda_fpr': 0.0, 'lambda_sp': 0.0}
+2025-11-08 20:11:51,364 - faircare_fl_demo - INFO - Round 10 - Train Loss: 0.6181, Val Acc: 0.7285, Val EO Gap: 0.0506, Val Worst F1: 0.6806
+2025-11-08 20:11:51,379 - faircare_fl_demo - INFO - Round 11: Selected clients [0, 8, 9, 3]
+2025-11-08 20:11:53,618 - faircare_fl_demo - INFO - Round 11 - Train Loss: 0.4014, Val Acc: 0.5325, Val EO Gap: 0.0019, Val Worst F1: 0.0328
+2025-11-08 20:11:53,621 - faircare_fl_demo - INFO - Round 12: Selected clients [2, 9, 8, 0]
+2025-11-08 20:11:55,375 - faircare_fl_demo - INFO - Round 12 - Train Loss: 0.5899, Val Acc: 0.5688, Val EO Gap: 0.0302, Val Worst F1: 0.5705
+2025-11-08 20:11:55,375 - faircare_fl_demo - INFO - Round 13: Selected clients [9, 3, 5, 6]
+2025-11-08 20:11:56,927 - faircare_fl_demo - INFO - Round 13 - Train Loss: 0.4188, Val Acc: 0.5268, Val EO Gap: 0.0000, Val Worst F1: 0.0000
+2025-11-08 20:11:56,927 - faircare_fl_demo - INFO - Round 14: Selected clients [2, 6, 4, 8]
+2025-11-08 20:11:59,467 - faircare_fl_demo - INFO - Round 14 - Train Loss: 0.3194, Val Acc: 0.7228, Val EO Gap: 0.0386, Val Worst F1: 0.6927
+2025-11-08 20:11:59,469 - faircare_fl_demo - INFO - Round 15: Selected clients [9, 2, 6, 1]
+2025-11-08 20:12:00,684 - faircare_fl_demo - INFO - Aggregator stats: {'round': 15, 'bias_mitigation_mode': False, 'gate_mode': 'heuristic', 'lambda_fair': 0.1, 'tau': 1.0, 'lambda_eo': 0.0, 'lambda_fpr': 0.0, 'lambda_sp': 0.0}
+2025-11-08 20:12:00,685 - faircare_fl_demo - INFO - Round 15 - Train Loss: 0.4291, Val Acc: 0.6348, Val EO Gap: 0.0778, Val Worst F1: 0.3276
+2025-11-08 20:12:00,685 - faircare_fl_demo - INFO - Round 16: Selected clients [7, 6, 2, 0]
+2025-11-08 20:12:02,151 - faircare_fl_demo - INFO - Round 16 - Train Loss: 0.5389, Val Acc: 0.7400, Val EO Gap: 0.0917, Val Worst F1: 0.6158
+2025-11-08 20:12:02,151 - faircare_fl_demo - INFO - Round 17: Selected clients [2, 5, 4, 3]
+2025-11-08 20:12:04,495 - faircare_fl_demo - INFO - Round 17 - Train Loss: 0.4888, Val Acc: 0.5698, Val EO Gap: 0.0264, Val Worst F1: 0.5853
+2025-11-08 20:12:04,495 - faircare_fl_demo - INFO - Round 18: Selected clients [9, 6, 8, 7]
+2025-11-08 20:12:05,652 - faircare_fl_demo - INFO - Round 18 - Train Loss: 0.4369, Val Acc: 0.5268, Val EO Gap: 0.0000, Val Worst F1: 0.0000
+2025-11-08 20:12:05,654 - faircare_fl_demo - INFO - Round 19: Selected clients [7, 1, 6, 9]
+2025-11-08 20:12:06,742 - faircare_fl_demo - INFO - Round 19 - Train Loss: 0.5400, Val Acc: 0.5268, Val EO Gap: 0.0000, Val Worst F1: 0.0000
+2025-11-08 20:12:06,743 - faircare_fl_demo - INFO - Round 20: Selected clients [2, 8, 1, 9]
+2025-11-08 20:12:08,457 - faircare_fl_demo - INFO - Aggregator stats: {'round': 20, 'bias_mitigation_mode': False, 'gate_mode': 'heuristic', 'lambda_fair': 0.1, 'tau': 1.0, 'lambda_eo': 0.0, 'lambda_fpr': 0.0, 'lambda_sp': 0.0}
+2025-11-08 20:12:08,461 - faircare_fl_demo - INFO - Round 20 - Train Loss: 0.4405, Val Acc: 0.5268, Val EO Gap: 0.0000, Val Worst F1: 0.0000
+2025-11-08 20:12:08,463 - faircare_fl_demo - INFO - Round 21: Selected clients [0, 2, 3, 8]
+2025-11-08 20:12:10,424 - faircare_fl_demo - INFO - Round 21 - Train Loss: 0.3967, Val Acc: 0.6683, Val EO Gap: 0.0974, Val Worst F1: 0.4170
+2025-11-08 20:12:10,425 - faircare_fl_demo - INFO - Round 22: Selected clients [5, 2, 1, 6]
+2025-11-08 20:12:11,984 - faircare_fl_demo - INFO - Round 22 - Train Loss: 0.5357, Val Acc: 0.7132, Val EO Gap: 0.1084, Val Worst F1: 0.5329
+2025-11-08 20:12:11,984 - faircare_fl_demo - INFO - Round 23: Selected clients [9, 5, 8, 2]
+2025-11-08 20:12:13,368 - faircare_fl_demo - INFO - Round 23 - Train Loss: 0.5383, Val Acc: 0.5985, Val EO Gap: 0.0826, Val Worst F1: 0.2019
+2025-11-08 20:12:13,371 - faircare_fl_demo - INFO - Round 24: Selected clients [9, 2, 4, 8]
+2025-11-08 20:12:15,381 - faircare_fl_demo - INFO - Round 24 - Train Loss: 0.5092, Val Acc: 0.4732, Val EO Gap: 0.0000, Val Worst F1: 0.5168
+2025-11-08 20:12:15,382 - faircare_fl_demo - INFO - Round 25: Selected clients [9, 5, 1, 3]
+2025-11-08 20:12:16,666 - faircare_fl_demo - INFO - Aggregator stats: {'round': 25, 'bias_mitigation_mode': False, 'gate_mode': 'heuristic', 'lambda_fair': 0.1, 'tau': 1.0, 'lambda_eo': 0.0, 'lambda_fpr': 0.0, 'lambda_sp': 0.0}
+2025-11-08 20:12:16,666 - faircare_fl_demo - INFO - Round 25 - Train Loss: 0.3435, Val Acc: 0.5268, Val EO Gap: 0.0000, Val Worst F1: 0.0000
+2025-11-08 20:12:16,666 - faircare_fl_demo - INFO - Training completed
+2025-11-08 20:12:16,674 - faircare_fl_demo - INFO - Final Val: {'val_loss': 1.0440869331359863, 'val_accuracy': 0.5267686424474187, 'val_EO_gap': 0.0, 'val_FPR_gap': 0.0, 'val_SP_gap': 0.0, 'val_max_group_gap': 0.0, 'val_macro_F1': 0.0, 'val_worst_group_F1': 0.0, 'val_g0_TPR': 0.0, 'val_g0_FPR': 0.0, 'val_g0_PPR': 0.0, 'val_g0_Precision': 0.0, 'val_g0_Recall': 0.0, 'val_g1_TPR': 0.0, 'val_g1_FPR': 0.0, 'val_g1_PPR': 0.0, 'val_g1_Precision': 0.0, 'val_g1_Recall': 0.0, 'val_group_stats': {'group_0': {'TP': 0, 'FP': 0, 'FN': 318, 'TN': 220, 'N': 538}, 'group_1': {'TP': 0, 'FP': 0, 'FN': 177, 'TN': 331, 'N': 508}}}
+2025-11-08 20:12:16,674 - faircare_fl_demo - INFO - Final Test: {'test_loss': 1.0404912233352661, 'test_accuracy': 0.519, 'test_EO_gap': 0.0016313213703099511, 'test_FPR_gap': 0.0, 'test_SP_gap': 0.0010309278350515464, 'test_max_group_gap': 0.0016313213703099511, 'test_macro_F1': 0.0016286644951140068, 'test_worst_group_F1': 0.0, 'test_g0_TPR': 0.0016313213703099511, 'test_g0_FPR': 0.0, 'test_g0_PPR': 0.0010309278350515464, 'test_g0_Precision': 1.0, 'test_g0_Recall': 0.0016313213703099511, 'test_g1_TPR': 0.0, 'test_g1_FPR': 0.0, 'test_g1_PPR': 0.0, 'test_g1_Precision': 0.0, 'test_g1_Recall': 0.0, 'test_group_stats': {'group_0': {'TP': 1, 'FP': 0, 'FN': 612, 'TN': 357, 'N': 970}, 'group_1': {'TP': 0, 'FP': 0, 'FN': 350, 'TN': 680, 'N': 1030}}}
+2025-11-08 20:12:16,674 - faircare_fl_demo - INFO - Final aggregator stats: {'round': 25, 'bias_mitigation_mode': False, 'gate_mode': 'heuristic', 'lambda_fair': 0.1, 'tau': 1.0, 'lambda_eo': 0.0, 'lambda_fpr': 0.0, 'lambda_sp': 0.0}
+2025-11-08 20:12:16,814 - faircare_fl_demo - INFO - ============================================================
+2025-11-08 20:12:16,815 - faircare_fl_demo - INFO - FINAL PERFORMANCE:
+2025-11-08 20:12:16,815 - faircare_fl_demo - INFO -   Accuracy: 0.5190
+2025-11-08 20:12:16,815 - faircare_fl_demo - INFO -   Worst Group F1: 0.0000
+2025-11-08 20:12:16,815 - faircare_fl_demo - INFO -   EO Gap: 0.0016
+2025-11-08 20:12:16,815 - faircare_fl_demo - INFO -   FPR Gap: 0.0000
+2025-11-08 20:12:16,815 - faircare_fl_demo - INFO -   SP Gap: 0.0010
+2025-11-08 20:12:16,815 - faircare_fl_demo - INFO -   Max Gap: 0.0016
+2025-11-08 20:12:16,815 - faircare_fl_demo - INFO - ------------------------------------------------------------
+2025-11-08 20:12:16,815 - faircare_fl_demo - INFO - TARGET ACHIEVEMENT:
+2025-11-08 20:12:16,817 - faircare_fl_demo - INFO - ============================================================
+2025-11-08 20:12:16,817 - faircare_fl_demo - INFO - Aggregator final statistics: {'round': 25, 'bias_mitigation_mode': False, 'gate_mode': 'heuristic', 'lambda_fair': 0.1, 'tau': 1.0, 'lambda_eo': 0.0, 'lambda_fpr': 0.0, 'lambda_sp': 0.0}
+2025-11-08 20:12:16,817 - faircare_fl_demo - INFO - Experiment completed
+2025-11-08 20:12:16,817 - faircare_fl_demo - INFO - Results saved to: results\demo\results.json
