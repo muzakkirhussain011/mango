@@ -11,7 +11,7 @@ from faircare.core.utils import (
     apply_model_delta,
     Logger
 )
-from faircare.core.client import Client
+from faircare.core.client import FairCareClient as Client
 from faircare.core.secure_agg import SecureAggregator
 from faircare.algos.aggregator import Aggregator, make_aggregator
 from faircare.fairness.metrics import fairness_report

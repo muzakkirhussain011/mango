@@ -13,7 +13,7 @@ from faircare.fairness.losses import (
 )
 from faircare.data.synth_health import generate_synthetic_health
 from faircare.models.classifier import create_model
-from faircare.core.client import Client
+from faircare.core.client import FairCareClient as Client
 from torch.utils.data import TensorDataset
 
 

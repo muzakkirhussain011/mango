@@ -6,7 +6,7 @@ import json
 
 from faircare.config import ExperimentConfig
 from faircare.core.utils import set_seed, Logger
-from faircare.core.client import Client
+from faircare.core.client import FairCareClient as Client
 from faircare.core.server import Server
 from faircare.data.partition import make_federated_splits
 from faircare.models.classifier import create_model
