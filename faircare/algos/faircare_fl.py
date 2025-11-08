@@ -893,6 +893,7 @@ class FairCareFLWrapper(BaseAggregator):
         # FedBLE-specific attributes
         self.gate_mode = gate_mode
         self.lambda_fair = lambda_fair
+        self.lambda_fair_init = lambda_fair  # Store initial value
         self.tau = tau
         self.use_adversary = use_adversary
         self.bias_threshold_eo = bias_threshold_eo
@@ -987,6 +988,11 @@ class FairCareFLWrapper(BaseAggregator):
             fairness_metrics.get('sp_gap', 0) > self.bias_threshold_sp
         )
 
+        # Update mitigation mode and increase lambda_fair when bias is detected
+        if bias_detected and not self.bias_mitigation_mode:
+            # First time bias is detected - increase lambda_fair
+            self.lambda_fair = min(self.lambda_fair * 1.5, 2.0)  # Cap at 2.0
+
         self.bias_mitigation_mode = bias_detected
 
     def _compute_component_weights(self, client_summaries: List[Dict[str, Any]]):
@@ -1000,6 +1006,7 @@ class FairCareFLWrapper(BaseAggregator):
             qffl: torch.Tensor
             fedprox: torch.Tensor
             afl: torch.Tensor
+            fairfate: torch.Tensor
 
         n = len(client_summaries)
 
@@ -1028,12 +1035,18 @@ class FairCareFLWrapper(BaseAggregator):
         inv_loss = 1.0 / (losses + 1e-6)
         afl_weights = inv_loss / inv_loss.sum()
 
+        # FairFATE: Fairness-aware Federated Learning (inverse worst-group F1)
+        wg_f1_scores = [s.get('worst_group_f1', 0.5) for s in client_summaries]
+        inv_wg_f1 = torch.tensor([1.0 / (f1 + 1e-6) for f1 in wg_f1_scores], dtype=torch.float32)
+        fairfate_weights = inv_wg_f1 / inv_wg_f1.sum()
+
         self._last_component_weights = ComponentWeights(
             fedavg=fedavg_weights,
             fairfed=fairfed_weights,
             qffl=qffl_weights,
             fedprox=fedprox_weights,
-            afl=afl_weights
+            afl=afl_weights,
+            fairfate=fairfate_weights
         )
 
         return self._last_component_weights

@@ -457,16 +457,22 @@ class FairCareClient:
         """Compute IRM (Invariant Risk Minimization) penalty."""
         unique_groups = torch.unique(sensitive_attr)
         penalties = []
-        
+
         for group in unique_groups:
             group_mask = sensitive_attr == group
-            
+
             if group_mask.sum() > 1:  # Need at least 2 samples
                 group_outputs = outputs[group_mask]
                 group_targets = target[group_mask]
-                
-                # Compute group-specific loss
-                group_loss = F.cross_entropy(group_outputs, group_targets)
+
+                # Compute group-specific loss based on output shape
+                if outputs.dim() == 1 or (outputs.dim() == 2 and outputs.size(1) == 1):
+                    # Binary classification
+                    group_outputs_flat = group_outputs.squeeze() if group_outputs.dim() == 2 else group_outputs
+                    group_loss = F.binary_cross_entropy_with_logits(group_outputs_flat, group_targets.float())
+                else:
+                    # Multi-class classification
+                    group_loss = F.cross_entropy(group_outputs, group_targets)
                 
                 # Compute gradient norm
                 grad = torch.autograd.grad(
