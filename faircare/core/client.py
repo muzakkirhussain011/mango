@@ -61,46 +61,143 @@ class AdversarialDebiasingNetwork(nn.Module):
 
 class FairCareClient:
     """Next-generation FairCare-FL client with full CALT implementation."""
-    
-    def __init__(self, client_id: int, model: nn.Module, config: Dict[str, Any], device: str = 'cuda'):
+
+    def __init__(self, client_id: int, model: nn.Module,
+                 train_dataset: Any = None, val_dataset: Any = None,
+                 batch_size: int = 32, config: Optional[Dict[str, Any]] = None,
+                 device: str = 'cuda'):
         """Initialize the FairCare-FL client.
-        
+
         Args:
             client_id: Unique client identifier
             model: Neural network model
+            train_dataset: Training dataset
+            val_dataset: Validation dataset
+            batch_size: Batch size for data loaders
             config: Client configuration
             device: Device for computation
         """
         self.client_id = client_id
         self.model = model.to(device)
-        self.config = config
+        self.train_dataset = train_dataset
+        self.val_dataset = val_dataset
+        self.batch_size = batch_size
+        self.config = config if config is not None else {}
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
-        
+
         # CALT parameters (optimal defaults)
         self.prox_mu = 0.001  # FedProx regularization
         self.lambda_irm = 0.5  # IRM penalty
         self.lambda_adv = 0.2  # Adversarial debiasing
         self.lambda_fair = 1.0  # Local fairness loss weight
-        
+
         # Fairness weights
         self.w_eo = 1.2  # Equal Opportunity
         self.w_fpr = 1.2  # False Positive Rate
         self.w_sp = 0.8  # Statistical Parity
-        
+
         # Augmentation flags
         self.use_mixup = True
         self.use_cia = True
         self.mixup_alpha = 0.4
         self.cia_alpha = 0.3
-        
+
         # Initialize adversarial network
         self.adversary = None
-        self.num_groups = config.get('num_groups', 2)
+        self.num_groups = self.config.get('num_groups', 2)
         
         # Track metrics
         self.training_history = []
         self.validation_metrics = {}
-    
+
+    def train(self, global_weights: Dict[str, torch.Tensor],
+              epochs: int, lr: float,
+              weight_decay: float = 0.0, proximal_mu: float = 0.0,
+              server_val_data: Optional[Any] = None,
+              fairness_config: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, torch.Tensor], int, Dict[str, Any]]:
+        """Train client model with federated learning.
+
+        Args:
+            global_weights: Global model weights
+            epochs: Number of local training epochs
+            lr: Learning rate
+            weight_decay: Weight decay (L2 regularization)
+            proximal_mu: FedProx proximal term coefficient
+            server_val_data: Server validation data (optional)
+            fairness_config: Fairness configuration from server
+
+        Returns:
+            Tuple of (delta, n_samples, stats)
+        """
+        # Override proximal mu if provided
+        if proximal_mu > 0:
+            self.prox_mu = proximal_mu
+
+        # Apply fairness config if provided
+        if fairness_config:
+            self.lambda_fair = fairness_config.get('lambda_fair', self.lambda_fair)
+            self.lambda_adv = fairness_config.get('lambda_adv', self.lambda_adv)
+            if fairness_config.get('use_adversary', False):
+                self.lambda_adv = max(self.lambda_adv, 0.2)
+
+        # Create data loaders
+        from torch.utils.data import DataLoader
+        train_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
+
+        if self.val_dataset is not None:
+            val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=False)
+        else:
+            # Use a portion of training data for validation
+            val_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=False)
+
+        # Call the main training method
+        report = self.train_faircare_fl(
+            global_weights=global_weights,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            local_epochs=epochs,
+            learning_rate=lr
+        )
+
+        # Extract delta, n_samples, and stats for backward compatibility
+        delta = report['delta']
+        n_samples = report['n_samples']
+
+        stats = {
+            'train_loss': report.get('val_loss', 0.0),  # Use val_loss as proxy for train_loss
+            'val_loss': report.get('val_loss', 0.0),
+            'accuracy': report.get('accuracy', 0.0),
+            'wg_f1': report.get('wg_f1', 0.0),
+            'worst_group_F1': report.get('wg_f1', 0.0),
+        }
+
+        # Add fairness metrics if group_counts are available
+        if 'group_counts' in report and len(report['group_counts']) >= 2:
+            group_ids = sorted(report['group_counts'].keys())
+            if len(group_ids) >= 2:
+                # Compute fairness gaps
+                tpr_list = []
+                fpr_list = []
+                ppr_list = []
+
+                for gid in group_ids:
+                    gc = report['group_counts'][gid]
+                    tp, fp, tn, fn = gc['TP'], gc['FP'], gc['TN'], gc['FN']
+
+                    tpr = tp / (tp + fn + 1e-8)
+                    fpr = fp / (fp + tn + 1e-8)
+                    ppr = (tp + fp) / (tp + fp + tn + fn + 1e-8)
+
+                    tpr_list.append(tpr)
+                    fpr_list.append(fpr)
+                    ppr_list.append(ppr)
+
+                stats['eo_gap'] = max(tpr_list) - min(tpr_list)
+                stats['fpr_gap'] = max(fpr_list) - min(fpr_list)
+                stats['sp_gap'] = max(ppr_list) - min(ppr_list)
+
+        return delta, n_samples, stats
+
     def train_faircare_fl(self, global_weights: Dict[str, torch.Tensor],
                           train_loader: DataLoader, val_loader: DataLoader,
                           local_epochs: int, learning_rate: float) -> Dict[str, Any]:

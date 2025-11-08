@@ -137,10 +137,10 @@ def make_aggregator(name: str, *, fairness_config: Any | None = None, **kwargs: 
     - Accepts `fairness_config` as dict/dataclass/Pydantic-like and merges it.
     - IMPORTANT: caller kwargs take precedence over fairness_config, so flags like
       `weighted=True` are never overridden by defaults inside fairness_config.
-    - Alias: 'faircare_fl' → 'fairfed' if the former isn't registered.
     """
-    if name not in REGISTRY and name == "faircare_fl" and "fairfed" in REGISTRY:
-        name = "fairfed"
+    # Removed fallback - faircare_fl is now registered separately
+    # if name not in REGISTRY and name == "faircare_fl" and "fairfed" in REGISTRY:
+    #     name = "fairfed"
 
     if name not in REGISTRY:
         raise ValueError(f"Unknown aggregator: {name}. Available: {list(REGISTRY.keys())}")
@@ -151,7 +151,8 @@ def make_aggregator(name: str, *, fairness_config: Any | None = None, **kwargs: 
     return builder(**all_kwargs)
 
 
-if "fairfed" in REGISTRY and "faircare_fl" not in REGISTRY:
-    REGISTRY["faircare_fl"] = REGISTRY["fairfed"]
+# Removed alias - faircare_fl is now registered separately
+# if "fairfed" in REGISTRY and "faircare_fl" not in REGISTRY:
+#     REGISTRY["faircare_fl"] = REGISTRY["fairfed"]
 
 Aggregator = BaseAggregator

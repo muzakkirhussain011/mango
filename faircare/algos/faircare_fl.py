@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import logging
 from collections import defaultdict
 import cvxpy as cp
+from faircare.algos.aggregator import BaseAggregator, register_aggregator
 
 logger = logging.getLogger(__name__)
 
@@ -867,3 +868,164 @@ def create_aggregator(config: Dict[str, Any], device: str = 'cuda') -> FairCareF
 ALGORITHM_REGISTRY = {
     'faircare_fl': create_aggregator
 }
+
+
+# ── BaseAggregator-compatible wrapper ─────────────────────────────────────────
+
+
+@register_aggregator("faircare_fl")
+class FairCareFLWrapper(BaseAggregator):
+    """Wrapper for FairCareFLAggregator that conforms to BaseAggregator interface."""
+
+    def __init__(self, n_clients: int,
+                 gate_mode: str = "heuristic",
+                 lambda_fair: float = 0.1,
+                 tau: float = 1.0,
+                 use_adversary: bool = False,
+                 bias_threshold_eo: float = 0.15,
+                 bias_threshold_fpr: float = 0.15,
+                 bias_threshold_sp: float = 0.1,
+                 fairness_config: Optional[Any] = None,
+                 **kwargs):
+        """Initialize wrapper with BaseAggregator interface."""
+        super().__init__(n_clients=n_clients, **kwargs)
+
+        # FedBLE-specific attributes
+        self.gate_mode = gate_mode
+        self.lambda_fair = lambda_fair
+        self.tau = tau
+        self.use_adversary = use_adversary
+        self.bias_threshold_eo = bias_threshold_eo
+        self.bias_threshold_fpr = bias_threshold_fpr
+        self.bias_threshold_sp = bias_threshold_sp
+        self.bias_mitigation_mode = False
+        self.gate_network = None
+
+        # Initialize the underlying FairCareFLAggregator
+        config = {
+            'gate_mode': gate_mode,
+            'lambda_fair': lambda_fair,
+            'tau': tau,
+            'fairness_config': fairness_config or {},
+            **kwargs
+        }
+        self._aggregator = FairCareFLAggregator(config=config, device='cpu')
+
+        # Track component weights
+        self._last_component_weights = None
+
+    def compute_weights(self, client_summaries: List[Dict[str, Any]]) -> torch.Tensor:
+        """Compute aggregation weights using FairCareFLAggregator logic."""
+        # Convert client summaries to client reports format
+        client_reports = []
+        for summary in client_summaries:
+            report = {
+                'client_id': summary.get('client_id', 0),
+                'n_samples': summary.get('n_samples', 100),
+                'val_loss': summary.get('val_loss', 1.0),
+                'group_counts': summary.get('group_counts', {}),
+                'proxies': summary.get('proxies', {}),
+                'wg_f1': summary.get('worst_group_f1', 0.5),
+                'delta': {}  # Placeholder for weight computation
+            }
+            client_reports.append(report)
+
+        # Compute fairness metrics
+        fairness_metrics = self._aggregator._compute_fairness_metrics(client_reports)
+
+        # Check for bias and update mitigation mode
+        self._check_bias(fairness_metrics)
+
+        # Compute tilts using DFBD
+        tilts = self._aggregator._compute_advanced_tilts(client_reports)
+
+        # Compute optimal weights
+        weights = self._aggregator._compute_optimal_weights(
+            client_reports, tilts, fairness_metrics
+        )
+
+        # Apply postprocessing
+        return self._postprocess(weights)
+
+    def _check_bias(self, fairness_metrics: Dict[str, float]):
+        """Check if bias is detected and update mitigation mode."""
+        bias_detected = (
+            fairness_metrics.get('eo_gap', 0) > self.bias_threshold_eo or
+            fairness_metrics.get('fpr_gap', 0) > self.bias_threshold_fpr or
+            fairness_metrics.get('sp_gap', 0) > self.bias_threshold_sp
+        )
+
+        self.bias_mitigation_mode = bias_detected
+
+    def _compute_component_weights(self, client_summaries: List[Dict[str, Any]]):
+        """Compute weights for different aggregation strategies (FedAvg, FairFed, Q-FFL, FedProx)."""
+        from dataclasses import dataclass
+
+        @dataclass
+        class ComponentWeights:
+            fedavg: torch.Tensor
+            fairfed: torch.Tensor
+            qffl: torch.Tensor
+            fedprox: torch.Tensor
+
+        n = len(client_summaries)
+
+        # FedAvg: proportional to samples
+        samples = torch.tensor([s.get('n_samples', 100) for s in client_summaries], dtype=torch.float32)
+        fedavg_weights = samples / samples.sum()
+
+        # FairFed: inverse fairness gap
+        eo_gaps = []
+        for s in client_summaries:
+            gap = s.get('eo_gap', s.get('val_loss', 0.0))
+            eo_gaps.append(float(gap) + 1e-6)
+        gaps = torch.tensor(eo_gaps, dtype=torch.float32)
+        inv_gaps = 1.0 / gaps
+        fairfed_weights = inv_gaps / inv_gaps.sum()
+
+        # Q-FFL: inverse loss squared
+        losses = torch.tensor([s.get('val_loss', 1.0) for s in client_summaries], dtype=torch.float32)
+        inv_loss_sq = 1.0 / (losses ** 2 + 1e-6)
+        qffl_weights = inv_loss_sq / inv_loss_sq.sum()
+
+        # FedProx: same as FedAvg (proportional to samples)
+        fedprox_weights = fedavg_weights.clone()
+
+        self._last_component_weights = ComponentWeights(
+            fedavg=fedavg_weights,
+            fairfed=fairfed_weights,
+            qffl=qffl_weights,
+            fedprox=fedprox_weights
+        )
+
+        return self._last_component_weights
+
+    def get_fairness_config(self) -> Dict[str, Any]:
+        """Get fairness configuration to broadcast to clients."""
+        return {
+            'lambda_fair': self.lambda_fair,
+            'use_adversary': self.use_adversary or self.bias_mitigation_mode,
+            'w_eo': 1.0,
+            'w_fpr': 0.5,
+            'w_sp': 0.5,
+            'bias_mitigation_mode': self.bias_mitigation_mode,
+            'extra_epoch': self.bias_mitigation_mode
+        }
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get aggregator statistics for logging."""
+        stats = {
+            'bias_mitigation_mode': self.bias_mitigation_mode,
+            'gate_mode': self.gate_mode,
+            'lambda_fair': self.lambda_fair,
+            'tau': self.tau
+        }
+
+        if hasattr(self._aggregator, 'lambda_eo'):
+            stats.update({
+                'lambda_eo': self._aggregator.lambda_eo.item(),
+                'lambda_fpr': self._aggregator.lambda_fpr.item(),
+                'lambda_sp': self._aggregator.lambda_sp.item()
+            })
+
+        return stats
