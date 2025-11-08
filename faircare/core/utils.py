@@ -104,19 +104,67 @@ def sample_clients(
     n_total: int,
     n_sample: int,
     availability: Optional[List[float]] = None,
+    priority_scores: Optional[List[float]] = None,
+    priority_fraction: float = 0.3,
     seed: Optional[int] = None
 ) -> List[int]:
-    """Sample clients for training round."""
+    """Sample clients with optional priority-mixture (FedFair³ approach).
+
+    Args:
+        n_total: Total number of clients
+        n_sample: Number of clients to sample
+        availability: Client availability weights (optional)
+        priority_scores: Priority scores for each client (optional)
+            Higher score = higher priority (based on loss, fairness gaps, recency)
+        priority_fraction: Fraction of samples from top-priority set (default 0.3)
+        seed: Random seed for reproducibility
+
+    Returns:
+        List of selected client indices
+    """
     if seed is not None:
         np.random.seed(seed)
-    
-    if availability is None:
-        # Uniform sampling
-        return np.random.choice(n_total, n_sample, replace=False).tolist()
+
+    # Simple uniform or availability-weighted sampling
+    if priority_scores is None:
+        if availability is None:
+            return np.random.choice(n_total, n_sample, replace=False).tolist()
+        else:
+            probs = np.array(availability) / np.sum(availability)
+            return np.random.choice(n_total, n_sample, replace=False, p=probs).tolist()
+
+    # Priority-mixture selection (FedFair³ approach)
+    priority_scores = np.array(priority_scores)
+
+    # Apply availability mask if provided
+    if availability is not None:
+        available_mask = np.array(availability) > 0
+        priority_scores = priority_scores * available_mask
+
+    # Determine split between priority and random
+    n_priority = max(1, int(n_sample * priority_fraction))
+    n_random = n_sample - n_priority
+
+    # Select top-priority clients
+    priority_indices = np.argsort(priority_scores)[-n_priority*2:]  # Top 2x for diversity
+    priority_selected = np.random.choice(
+        priority_indices,
+        size=n_priority,
+        replace=False
+    ).tolist()
+
+    # Select remaining from non-priority pool
+    remaining_indices = [i for i in range(n_total) if i not in priority_selected]
+    if len(remaining_indices) >= n_random:
+        random_selected = np.random.choice(
+            remaining_indices,
+            size=n_random,
+            replace=False
+        ).tolist()
     else:
-        # Weighted sampling based on availability
-        probs = np.array(availability) / np.sum(availability)
-        return np.random.choice(n_total, n_sample, replace=False, p=probs).tolist()
+        random_selected = remaining_indices
+
+    return priority_selected + random_selected
 
 
 class Logger:

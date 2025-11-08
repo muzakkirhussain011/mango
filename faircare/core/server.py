@@ -50,10 +50,10 @@ class Server:
         
         # Move model to device
         self.model.to(self.device)
-        
+
         # Initialize global weights
         self.global_weights = copy.deepcopy(self.model.state_dict())
-        
+
         # History tracking
         self.history = {
             "train_loss": [],
@@ -62,7 +62,58 @@ class Server:
             "test_acc": [],
             "fairness_metrics": []
         }
-    
+
+        # Fair client selection tracking (FedFair³)
+        self.client_priority_scores = [0.0] * len(clients)
+        self.client_last_selected = [-1] * len(clients)  # Round number
+        self.client_loss_history = [[] for _ in range(len(clients))]
+        self.client_fairness_history = [[] for _ in range(len(clients))]
+        self.enable_priority_selection = True
+        self.priority_fraction = 0.3  # 30% from high-priority, 70% random
+
+    def _compute_priority_scores(self, round_idx: int) -> List[float]:
+        """Compute priority scores for fair client selection (FedFair³).
+
+        Priority increases with:
+        - Higher recent loss (needs more attention)
+        - Larger local fairness gaps (bias mitigation)
+        - Longer time since last selection (participation fairness)
+        """
+        scores = []
+        for client_id in range(len(self.clients)):
+            # Loss component: higher loss = higher priority
+            if self.client_loss_history[client_id]:
+                recent_loss = self.client_loss_history[client_id][-1]
+                loss_score = recent_loss
+            else:
+                loss_score = 1.0  # Default for unselected clients
+
+            # Fairness component: higher gaps = higher priority
+            if self.client_fairness_history[client_id]:
+                recent_gaps = self.client_fairness_history[client_id][-1]
+                fairness_score = recent_gaps.get('eo_gap', 0) + \
+                                recent_gaps.get('fpr_gap', 0) + \
+                                recent_gaps.get('sp_gap', 0)
+            else:
+                fairness_score = 0.1  # Small default
+
+            # Recency component: longer time = higher priority
+            rounds_since_selected = round_idx - self.client_last_selected[client_id]
+            if rounds_since_selected < 0:
+                rounds_since_selected = round_idx  # Never selected
+
+            recency_score = min(rounds_since_selected / 10.0, 2.0)  # Cap at 2.0
+
+            # Combined priority (weighted sum)
+            priority = (
+                0.4 * loss_score +
+                0.3 * fairness_score +
+                0.3 * recency_score
+            )
+            scores.append(priority)
+
+        return scores
+
     def train_round(
         self,
         round_idx: int,
@@ -74,12 +125,23 @@ class Server:
         server_lr: float = 1.0
     ) -> Dict[str, Any]:
         """Execute one training round with fairness-aware aggregation."""
-        # Sample clients
-        selected_clients = sample_clients(
-            n_total=len(self.clients),
-            n_sample=n_clients,
-            seed=round_idx
-        )
+        # Sample clients with priority-mixture (FedFair³)
+        if self.enable_priority_selection:
+            priority_scores = self._compute_priority_scores(round_idx)
+            selected_clients = sample_clients(
+                n_total=len(self.clients),
+                n_sample=n_clients,
+                priority_scores=priority_scores,
+                priority_fraction=self.priority_fraction,
+                seed=round_idx
+            )
+        else:
+            # Fallback to uniform sampling
+            selected_clients = sample_clients(
+                n_total=len(self.clients),
+                n_sample=n_clients,
+                seed=round_idx
+            )
         
         if self.logger:
             self.logger.info(f"Round {round_idx}: Selected clients {selected_clients}")
@@ -160,7 +222,20 @@ class Server:
                 "avg_sp_gap": sum(s.get("sp_gap", 0) for s in client_stats) / len(client_stats),
                 "avg_worst_group_F1": sum(s.get("worst_group_F1", 0) for s in client_stats) / len(client_stats)
             })
-        
+
+        # Update client participation tracking for fair selection
+        for stats in client_stats:
+            client_id = stats['client_id']
+            self.client_last_selected[client_id] = round_idx
+            self.client_loss_history[client_id].append(stats.get('train_loss', 0.0))
+            if "eo_gap" in stats:
+                fairness_gaps = {
+                    'eo_gap': stats.get('eo_gap', 0.0),
+                    'fpr_gap': stats.get('fpr_gap', 0.0),
+                    'sp_gap': stats.get('sp_gap', 0.0)
+                }
+                self.client_fairness_history[client_id].append(fairness_gaps)
+
         # Log aggregator statistics if available
         if hasattr(self.aggregator, 'get_statistics'):
             agg_stats = self.aggregator.get_statistics()
