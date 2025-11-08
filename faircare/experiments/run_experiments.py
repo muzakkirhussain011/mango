@@ -149,12 +149,12 @@ class FederatedExperiment:
         input_dim = train_data[0][0].shape[0] if hasattr(train_data[0][0], 'shape') else 100
         num_classes = len(torch.unique(torch.tensor([y for _, y, _ in train_data])))
         num_groups = len(torch.unique(torch.tensor([a for _, _, a in train_data])))
-        
+
         self.data_info = {
             'input_dim': input_dim,
             'num_classes': num_classes,
             'num_groups': num_groups,
-            'num_clients': num_clients,
+            'num_clients': len(self.client_data),  # Actual number of clients with data
             'total_samples': len(train_data)
         }
         
@@ -203,36 +203,39 @@ class FederatedExperiment:
     
     def select_clients(self, round_num: int) -> List[int]:
         """Select clients for participation in current round.
-        
+
         Args:
             round_num: Current round number
-            
+
         Returns:
             List of selected client indices
         """
-        num_clients = self.data_info['num_clients']
+        # Get available clients (those that have data)
+        available_clients = list(self.client_data.keys())
+        num_available = len(available_clients)
+
         client_fraction = self.config.get('client_fraction', 0.3)
         min_clients = self.config.get('min_clients_per_round', 10)
-        
-        num_selected = max(min_clients, int(client_fraction * num_clients))
-        
+
+        num_selected = min(num_available, max(min_clients, int(client_fraction * num_available)))
+
         # For FairCare-FL, use fairness-aware selection if available
         if self.config['algorithm'] == 'faircare_fl' and hasattr(self.aggregator, 'fairness_debt_scores'):
             # Select based on fairness debt scores
             scores = self.aggregator.fairness_debt_scores
             if scores:
-                # Probability proportional to debt
-                client_ids = list(range(num_clients))
-                probs = np.array([scores.get(i, 1.0) for i in client_ids])
+                # Probability proportional to debt (only for available clients)
+                probs = np.array([scores.get(i, 1.0) for i in available_clients])
                 probs = probs / probs.sum()
-                selected = np.random.choice(client_ids, size=num_selected, replace=False, p=probs)
+                selected_indices = np.random.choice(len(available_clients), size=num_selected, replace=False, p=probs)
+                selected = [available_clients[i] for i in selected_indices]
             else:
-                selected = np.random.choice(num_clients, size=num_selected, replace=False)
+                selected = np.random.choice(available_clients, size=num_selected, replace=False).tolist()
         else:
-            # Random selection
-            selected = np.random.choice(num_clients, size=num_selected, replace=False)
-        
-        return selected.tolist()
+            # Random selection from available clients
+            selected = np.random.choice(available_clients, size=num_selected, replace=False).tolist()
+
+        return selected
     
     def train_client(self, client_id: int, global_weights: Dict[str, torch.Tensor]) -> Dict[str, Any]:
         """Train a single client.
