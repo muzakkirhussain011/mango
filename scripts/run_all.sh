@@ -25,16 +25,15 @@ for dataset in "${DATASETS[@]}"; do
             echo "    Seed: $seed"
             
             python -m faircare.experiments.run_experiments \
-                --algo $algo \
+                --algorithm $algo \
                 --dataset $dataset \
-                --sensitive sex \
-                --clients 10 \
+                --sensitive_attr sex \
+                --num_clients 10 \
                 --rounds 20 \
                 --local_epochs 1 \
-                --lr 0.01 \
+                --learning_rate 0.01 \
                 --seed $seed \
-                --logdir results/full_evaluation/$algo/$dataset/seed$seed \
-                --device cpu
+                --save_dir results/full_evaluation/$algo/$dataset/seed$seed
         done
     done
 done

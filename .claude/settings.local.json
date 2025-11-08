@@ -4,7 +4,8 @@
       "Bash(find:*)",
       "Read(//d/**)",
       "Bash(python:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(bash scripts/run_all.sh:*)"
     ],
     "deny": [],
     "ask": []

@@ -2,6 +2,9 @@
 # faircare/utils/metrics.py
 # ============================================================================
 
+from typing import Dict
+import numpy as np
+
 def compute_fairness_metrics(predictions: np.ndarray, targets: np.ndarray, 
                            groups: np.ndarray) -> Dict[str, float]:
     """Compute fairness metrics.

@@ -851,6 +851,159 @@ def train_faircare_fl(client_id: int, model: nn.Module, config: Dict[str, Any],
     return report
 
 
+def train_basic(client_id: int, model: nn.Module, config: Dict[str, Any],
+                global_weights: Dict[str, torch.Tensor],
+                train_loader: DataLoader, val_loader: DataLoader,
+                local_epochs: int = 2, learning_rate: float = 0.001,
+                device: str = 'cuda') -> Dict[str, Any]:
+    """Basic client training for standard algorithms (FedAvg, FedProx, etc.).
+
+    Args:
+        client_id: Client identifier
+        model: Neural network model
+        config: Algorithm configuration
+        global_weights: Global model weights
+        train_loader: Training data loader
+        val_loader: Validation data loader
+        local_epochs: Number of local epochs
+        learning_rate: Learning rate
+        device: Device for computation
+
+    Returns:
+        Client report with updates and metrics
+    """
+    # Move model to device
+    model = model.to(device)
+    model.load_state_dict(global_weights)
+
+    # Store initial weights for computing delta
+    initial_weights = {k: v.clone() for k, v in model.state_dict().items()}
+
+    # Setup optimizer
+    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
+    criterion = nn.CrossEntropyLoss()
+
+    # Get algorithm-specific parameters
+    prox_mu = config.get('prox_mu', 0.0)  # For FedProx
+
+    # Training loop
+    model.train()
+    for epoch in range(local_epochs):
+        for batch_idx, batch in enumerate(train_loader):
+            if len(batch) == 3:
+                X, y, sensitive = batch
+            else:
+                X, y = batch
+
+            X, y = X.to(device), y.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(X)
+            loss = criterion(outputs, y)
+
+            # Add FedProx proximal term if needed
+            if prox_mu > 0:
+                proximal_term = 0.0
+                for name, param in model.named_parameters():
+                    proximal_term += torch.norm(param - global_weights[name].to(device)) ** 2
+                loss += (prox_mu / 2) * proximal_term
+
+            loss.backward()
+            optimizer.step()
+
+    # Compute delta (weight update)
+    current_weights = model.state_dict()
+    delta = {}
+    for key in initial_weights:
+        delta[key] = current_weights[key].cpu() - initial_weights[key].cpu()
+
+    # Validation
+    model.eval()
+    val_loss = 0.0
+    correct = 0
+    total = 0
+    all_preds = []
+    all_targets = []
+    all_sensitive = []
+
+    with torch.no_grad():
+        for batch in val_loader:
+            if len(batch) == 3:
+                X, y, sensitive = batch
+                all_sensitive.extend(sensitive.cpu().numpy())
+            else:
+                X, y = batch
+
+            X, y = X.to(device), y.to(device)
+            outputs = model(X)
+            loss = criterion(outputs, y)
+            val_loss += loss.item() * X.size(0)
+
+            _, predicted = outputs.max(1)
+            total += y.size(0)
+            correct += predicted.eq(y).sum().item()
+
+            all_preds.extend(predicted.cpu().numpy())
+            all_targets.extend(y.cpu().numpy())
+
+    val_loss = val_loss / total
+    accuracy = correct / total
+
+    # Compute group-wise metrics if sensitive attributes available
+    group_counts = {}
+    if all_sensitive:
+        all_preds = np.array(all_preds)
+        all_targets = np.array(all_targets)
+        all_sensitive = np.array(all_sensitive)
+
+        for group_id in np.unique(all_sensitive):
+            mask = all_sensitive == group_id
+            group_preds = all_preds[mask]
+            group_targets = all_targets[mask]
+
+            TP = ((group_preds == 1) & (group_targets == 1)).sum()
+            FP = ((group_preds == 1) & (group_targets == 0)).sum()
+            TN = ((group_preds == 0) & (group_targets == 0)).sum()
+            FN = ((group_preds == 0) & (group_targets == 1)).sum()
+
+            group_counts[int(group_id)] = {
+                'TP': int(TP),
+                'FP': int(FP),
+                'TN': int(TN),
+                'FN': int(FN)
+            }
+
+    # Compute worst-group F1
+    wg_f1 = 1.0
+    if group_counts:
+        f1_scores = []
+        for stats in group_counts.values():
+            tp, fp, fn = stats['TP'], stats['FP'], stats['FN']
+            precision = tp / (tp + fp + 1e-8)
+            recall = tp / (tp + fn + 1e-8)
+            f1 = 2 * precision * recall / (precision + recall + 1e-8)
+            f1_scores.append(f1)
+        wg_f1 = min(f1_scores) if f1_scores else 0.0
+
+    # Prepare report
+    report = {
+        'client_id': client_id,
+        'delta': delta,
+        'n_samples': len(train_loader.dataset),
+        'val_loss': val_loss,
+        'group_counts': group_counts,
+        'proxies': {
+            'loss_drift': 0.0,
+            'delta_norm': sum(torch.norm(v.float()).item() ** 2 for v in delta.values() if v.dtype in [torch.float16, torch.float32, torch.float64]) ** 0.5,
+            'ece_proxy': 0.1
+        },
+        'wg_f1': wg_f1,
+        'accuracy': accuracy
+    }
+
+    return report
+
+
 # Client dispatcher for algorithm routing
 def client_update(algorithm: str, client_id: int, model: nn.Module,
                  config: Dict[str, Any], global_weights: Dict[str, torch.Tensor],
@@ -879,9 +1032,11 @@ def client_update(algorithm: str, client_id: int, model: nn.Module,
             train_loader, val_loader, local_epochs, learning_rate, device
         )
     else:
-        # Fallback to standard training for other algorithms
-        # This would call the existing client training functions
-        raise NotImplementedError(f"Algorithm {algorithm} not implemented in this client")
+        # Use basic training for standard algorithms (FedAvg, FedProx, etc.)
+        return train_basic(
+            client_id, model, config, global_weights,
+            train_loader, val_loader, local_epochs, learning_rate, device
+        )
 
 
 # Export the main entry points

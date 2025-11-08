@@ -314,21 +314,24 @@ class FederatedExperiment:
         
         return new_weights
     
-    def weighted_average(self, client_reports: List[Dict[str, Any]], 
+    def weighted_average(self, client_reports: List[Dict[str, Any]],
                         global_weights: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Perform simple weighted averaging of client updates."""
         total_samples = sum(r['n_samples'] for r in client_reports)
-        
+
         averaged_weights = {}
         for key in global_weights:
-            weighted_sum = torch.zeros_like(global_weights[key])
-            
+            weighted_sum = torch.zeros_like(global_weights[key], dtype=torch.float32)
+
             for report in client_reports:
                 weight = report['n_samples'] / total_samples
-                weighted_sum += weight * (global_weights[key] + report['delta'][key])
-            
-            averaged_weights[key] = weighted_sum
-        
+                # Convert to same device and dtype as needed for computation
+                delta = report['delta'][key].to(global_weights[key].device)
+                weighted_sum += weight * (global_weights[key].float() + delta)
+
+            # Cast back to original dtype
+            averaged_weights[key] = weighted_sum.to(global_weights[key].dtype)
+
         return averaged_weights
     
     def evaluate_global_model(self, data_loader: DataLoader, prefix: str = 'val') -> Dict[str, float]:
