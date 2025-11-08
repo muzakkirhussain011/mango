@@ -249,21 +249,51 @@ class FederatedExperiment:
         """
         # Get client data
         client_dataset = self.client_data[client_id]
-        
+        dataset_size = len(client_dataset)
+
+        # Skip clients with insufficient data (need at least 2 samples for BatchNorm)
+        if dataset_size < 2:
+            self.logger.warning(f"Skipping client {client_id} with only {dataset_size} samples")
+            # Return a dummy report
+            return {
+                'client_id': client_id,
+                'delta': {k: torch.zeros_like(v) for k, v in global_weights.items()},
+                'n_samples': 0,
+                'val_loss': 0.0,
+                'group_counts': {},
+                'proxies': {'loss_drift': 0.0, 'delta_norm': 0.0, 'ece_proxy': 0.1},
+                'wg_f1': 0.0,
+                'accuracy': 0.0
+            }
+
         # Create data loaders
         batch_size = self.config.get('batch_size', 128)
+
+        # For small datasets, use smaller batch size and ensure we have validation data
+        if dataset_size < batch_size:
+            # Ensure batch size is at least 2 for BatchNorm
+            effective_batch_size = min(dataset_size, max(2, dataset_size // 2))
+            drop_last = False
+        else:
+            effective_batch_size = batch_size
+            drop_last = True
+
         train_loader = DataLoader(
             client_dataset,
-            batch_size=batch_size,
+            batch_size=effective_batch_size,
             shuffle=True,
-            drop_last=True
+            drop_last=drop_last
         )
-        
-        # Split for validation (last 20%)
-        val_size = int(0.2 * len(client_dataset))
-        val_indices = list(range(len(client_dataset) - val_size, len(client_dataset)))
+
+        # Split for validation (last 20%, but at least 1 sample)
+        val_size = max(1, int(0.2 * dataset_size))
+        # If dataset is very small, use it for both training and validation
+        if dataset_size < 5:
+            val_indices = list(range(dataset_size))
+        else:
+            val_indices = list(range(dataset_size - val_size, dataset_size))
         val_subset = Subset(client_dataset, val_indices)
-        val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False)
+        val_loader = DataLoader(val_subset, batch_size=effective_batch_size, shuffle=False)
         
         # Create model copy
         client_model = create_model(
@@ -320,13 +350,21 @@ class FederatedExperiment:
     def weighted_average(self, client_reports: List[Dict[str, Any]],
                         global_weights: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Perform simple weighted averaging of client updates."""
-        total_samples = sum(r['n_samples'] for r in client_reports)
+        # Filter out clients with no samples (skipped clients)
+        valid_reports = [r for r in client_reports if r['n_samples'] > 0]
+
+        # If no valid reports, return unchanged weights
+        if not valid_reports:
+            self.logger.warning("No valid client updates to aggregate")
+            return global_weights
+
+        total_samples = sum(r['n_samples'] for r in valid_reports)
 
         averaged_weights = {}
         for key in global_weights:
             weighted_sum = torch.zeros_like(global_weights[key], dtype=torch.float32)
 
-            for report in client_reports:
+            for report in valid_reports:
                 weight = report['n_samples'] / total_samples
                 # Convert to same device and dtype as needed for computation
                 delta = report['delta'][key].to(global_weights[key].device)

@@ -897,6 +897,10 @@ def train_basic(client_id: int, model: nn.Module, config: Dict[str, Any],
 
             X, y = X.to(device), y.to(device)
 
+            # Skip single-sample batches (BatchNorm requires batch_size > 1)
+            if X.size(0) < 2:
+                continue
+
             optimizer.zero_grad()
             outputs = model(X)
             loss = criterion(outputs, y)
@@ -946,8 +950,13 @@ def train_basic(client_id: int, model: nn.Module, config: Dict[str, Any],
             all_preds.extend(predicted.cpu().numpy())
             all_targets.extend(y.cpu().numpy())
 
-    val_loss = val_loss / total
-    accuracy = correct / total
+    # Handle edge case where validation set is empty
+    if total > 0:
+        val_loss = val_loss / total
+        accuracy = correct / total
+    else:
+        val_loss = 0.0
+        accuracy = 0.0
 
     # Compute group-wise metrics if sensitive attributes available
     group_counts = {}
