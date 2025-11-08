@@ -306,9 +306,15 @@ class FairCareClient:
             
             # Compute losses
             loss_components = {}
-            
-            # 1. ERM loss (cross-entropy)
-            erm_loss = F.cross_entropy(outputs, target)
+
+            # 1. ERM loss (cross-entropy or BCE depending on output shape)
+            if outputs.dim() == 1 or (outputs.dim() == 2 and outputs.size(1) == 1):
+                # Binary classification with single output
+                outputs_flat = outputs.squeeze() if outputs.dim() == 2 else outputs
+                erm_loss = F.binary_cross_entropy_with_logits(outputs_flat, target.float())
+            else:
+                # Multi-class classification
+                erm_loss = F.cross_entropy(outputs, target)
             loss_components['erm'] = erm_loss
             
             # 2. FedProx regularization
@@ -563,7 +569,12 @@ class FairCareClient:
     def _update_group_stats(self, outputs: torch.Tensor, target: torch.Tensor,
                            sensitive_attr: torch.Tensor, group_stats: Dict):
         """Update confusion matrix statistics for each group."""
-        predictions = torch.argmax(outputs, dim=1)
+        # Handle both single-output (binary) and multi-class outputs
+        if outputs.dim() == 1 or (outputs.dim() == 2 and outputs.size(1) == 1):
+            outputs_flat = outputs.squeeze() if outputs.dim() == 2 else outputs
+            predictions = (torch.sigmoid(outputs_flat) > 0.5).long()
+        else:
+            predictions = torch.argmax(outputs, dim=1)
         
         unique_groups = torch.unique(sensitive_attr)
         
@@ -604,12 +615,21 @@ class FairCareClient:
                 sensitive_attr = sensitive_attr.to(self.device)
                 
                 outputs = self.model(data)
-                loss = F.cross_entropy(outputs, target)
-                
+
+                # Compute loss based on output shape
+                if outputs.dim() == 1 or (outputs.dim() == 2 and outputs.size(1) == 1):
+                    outputs_flat = outputs.squeeze() if outputs.dim() == 2 else outputs
+                    loss = F.binary_cross_entropy_with_logits(outputs_flat, target.float())
+                    probs_flat = torch.sigmoid(outputs_flat)
+                    # Convert to 2D probs for consistency
+                    probs = torch.stack([1 - probs_flat, probs_flat], dim=1)
+                    predictions = (probs_flat > 0.5).long()
+                else:
+                    loss = F.cross_entropy(outputs, target)
+                    probs = torch.softmax(outputs, dim=1)
+                    predictions = torch.argmax(outputs, dim=1)
+
                 total_loss += loss.item()
-                
-                probs = torch.softmax(outputs, dim=1)
-                predictions = torch.argmax(outputs, dim=1)
                 
                 correct += (predictions == target).sum().item()
                 total += target.size(0)

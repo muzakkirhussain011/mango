@@ -899,7 +899,17 @@ class FairCareFLWrapper(BaseAggregator):
         self.bias_threshold_fpr = bias_threshold_fpr
         self.bias_threshold_sp = bias_threshold_sp
         self.bias_mitigation_mode = False
-        self.gate_network = None
+
+        # Initialize gate network if using learned mode
+        if gate_mode == "learned":
+            self.gate_network = nn.Sequential(
+                nn.Linear(5, 16),  # 5 input features (from component weights)
+                nn.ReLU(),
+                nn.Linear(16, 5),  # 5 output weights (for each component)
+                nn.Softmax(dim=-1)
+            )
+        else:
+            self.gate_network = None
 
         # Initialize the underlying FairCareFLAggregator
         config = {
@@ -914,8 +924,14 @@ class FairCareFLWrapper(BaseAggregator):
         # Track component weights
         self._last_component_weights = None
 
+        # Track round number
+        self._round_counter = 0
+
     def compute_weights(self, client_summaries: List[Dict[str, Any]]) -> torch.Tensor:
         """Compute aggregation weights using FairCareFLAggregator logic."""
+        # Increment round counter
+        self._round_counter += 1
+
         # Convert client summaries to client reports format
         client_reports = []
         for summary in client_summaries:
@@ -931,7 +947,23 @@ class FairCareFLWrapper(BaseAggregator):
             client_reports.append(report)
 
         # Compute fairness metrics
-        fairness_metrics = self._aggregator._compute_fairness_metrics(client_reports)
+        # First try to use pre-computed gaps if available in summaries
+        has_precomputed = all('eo_gap' in s or 'fpr_gap' in s or 'sp_gap' in s for s in client_summaries)
+        if has_precomputed:
+            # Use average of client gaps
+            eo_gaps = [s.get('eo_gap', 0.0) for s in client_summaries]
+            fpr_gaps = [s.get('fpr_gap', 0.0) for s in client_summaries]
+            sp_gaps = [s.get('sp_gap', 0.0) for s in client_summaries]
+
+            fairness_metrics = {
+                'eo_gap': max(eo_gaps) if eo_gaps else 0.0,  # Use max for conservative bias detection
+                'fpr_gap': max(fpr_gaps) if fpr_gaps else 0.0,
+                'sp_gap': max(sp_gaps) if sp_gaps else 0.0,
+                'worst_group_f1': min([s.get('worst_group_f1', 0.5) for s in client_summaries])
+            }
+        else:
+            # Compute from group_counts
+            fairness_metrics = self._aggregator._compute_fairness_metrics(client_reports)
 
         # Check for bias and update mitigation mode
         self._check_bias(fairness_metrics)
@@ -967,6 +999,7 @@ class FairCareFLWrapper(BaseAggregator):
             fairfed: torch.Tensor
             qffl: torch.Tensor
             fedprox: torch.Tensor
+            afl: torch.Tensor
 
         n = len(client_summaries)
 
@@ -991,11 +1024,16 @@ class FairCareFLWrapper(BaseAggregator):
         # FedProx: same as FedAvg (proportional to samples)
         fedprox_weights = fedavg_weights.clone()
 
+        # AFL: Agnostic Federated Learning (inverse loss)
+        inv_loss = 1.0 / (losses + 1e-6)
+        afl_weights = inv_loss / inv_loss.sum()
+
         self._last_component_weights = ComponentWeights(
             fedavg=fedavg_weights,
             fairfed=fairfed_weights,
             qffl=qffl_weights,
-            fedprox=fedprox_weights
+            fedprox=fedprox_weights,
+            afl=afl_weights
         )
 
         return self._last_component_weights
@@ -1015,6 +1053,7 @@ class FairCareFLWrapper(BaseAggregator):
     def get_statistics(self) -> Dict[str, Any]:
         """Get aggregator statistics for logging."""
         stats = {
+            'round': self._round_counter,
             'bias_mitigation_mode': self.bias_mitigation_mode,
             'gate_mode': self.gate_mode,
             'lambda_fair': self.lambda_fair,
