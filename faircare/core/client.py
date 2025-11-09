@@ -322,7 +322,11 @@ class FairCareClient:
                 data = self._counterfactual_augmentation(
                     data, sensitive_attr
                 )
-            
+
+            # Skip single-sample batches (BatchNorm requires batch_size > 1)
+            if data.size(0) < 2:
+                continue
+
             # Forward pass
             optimizer.zero_grad()
             
