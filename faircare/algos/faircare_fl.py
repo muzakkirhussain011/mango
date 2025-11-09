@@ -85,8 +85,8 @@ class FairCareFLAggregator:
         self.lambda_eo = nn.Parameter(torch.tensor(0.0, device=self.device))
         self.lambda_fpr = nn.Parameter(torch.tensor(0.0, device=self.device))
         self.lambda_sp = nn.Parameter(torch.tensor(0.0, device=self.device))
-        self.dual_lr = 0.01  # Very gentle dual ascent to prevent instability
-        self.dual_max = 1.0  # Cap dual variables to prevent dominance
+        self.dual_lr = 0.005  # Ultra-gentle dual ascent for GPU stability
+        self.dual_max = 0.5  # Conservative cap to prevent dominance
         self.epsilon_eo = 0.015
         self.epsilon_fpr = 0.015
         self.epsilon_sp = 0.02
