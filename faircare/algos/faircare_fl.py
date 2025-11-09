@@ -72,20 +72,21 @@ class FairCareFLAggregator:
         self.round_counter = 0
         
         # Multi-objective optimization parameters
-        self.server_momentum = 0.9  # High momentum for stability
+        self.server_momentum = 0.3  # Moderate momentum for stability without collapse
         self.momentum_buffer = None
         
         # Gradient mixing parameters
         self.mgda_normalize = True
-        self.mgda_step_size = 0.1  # Reduced for numerical stability
-        self.pcgrad_enabled = True
+        self.mgda_step_size = 0.01  # Very small for stability - fairness signal is strong
+        self.pcgrad_enabled = True  # Re-enabled with lower momentum
         self.cagrad_rho = 0.7  # Higher for more conflict aversion
         
         # Fairness dual variables (Lagrangian multipliers)
         self.lambda_eo = nn.Parameter(torch.tensor(0.0, device=self.device))
         self.lambda_fpr = nn.Parameter(torch.tensor(0.0, device=self.device))
         self.lambda_sp = nn.Parameter(torch.tensor(0.0, device=self.device))
-        self.dual_lr = 0.15
+        self.dual_lr = 0.01  # Very gentle dual ascent to prevent instability
+        self.dual_max = 1.0  # Cap dual variables to prevent dominance
         self.epsilon_eo = 0.015
         self.epsilon_fpr = 0.015
         self.epsilon_sp = 0.02
@@ -136,11 +137,11 @@ class FairCareFLAggregator:
             AggregationOutput with optimized global model and comprehensive logs
         """
         self.round_counter += 1
-        
+
         # Move everything to device
         client_reports = self._prepare_reports(client_reports)
         global_model = {k: v.to(self.device) for k, v in global_model.items()}
-        
+
         # Step 1: Compute three objectives and their gradients
         objectives = self._compute_objectives(client_reports, global_model)
         
@@ -208,9 +209,9 @@ class FairCareFLAggregator:
             prep_report['wg_f1'] = report.get('wg_f1', 0.5)
             
             prepared.append(prep_report)
-        
+
         return prepared
-    
+
     def _compute_objectives(self, client_reports: List[Dict], 
                            global_model: Dict[str, torch.Tensor]) -> Dict[str, Dict[str, torch.Tensor]]:
         """Compute three core objectives and their gradients."""
@@ -449,57 +450,116 @@ class FairCareFLAggregator:
         """Multiple Gradient Descent Algorithm for Pareto-optimal direction."""
         # Flatten gradients
         grad_list = []
+        valid_obj_names = []
         for obj_name in ['accuracy', 'worst_group', 'fairness']:
             flat_grad = torch.cat([g.flatten() for g in objectives[obj_name].values()])
-            
+
+            # Check for NaN in gradient
+            if torch.isnan(flat_grad).any() or torch.isinf(flat_grad).any():
+                logger.warning(f"NaN or Inf detected in {obj_name} gradient, skipping this objective")
+                continue
+
             if self.mgda_normalize:
-                flat_grad = flat_grad / (torch.norm(flat_grad) + 1e-8)
-            
+                grad_norm = torch.norm(flat_grad)
+                if grad_norm > 1e-8:
+                    flat_grad = flat_grad / grad_norm
+                else:
+                    # Skip zero gradients
+                    logger.warning(f"Zero gradient detected for {obj_name}, skipping")
+                    continue
+
             grad_list.append(flat_grad.cpu().numpy())
-        
+            valid_obj_names.append(obj_name)
+
+        # If no valid gradients, fall back to equal weights
+        if len(grad_list) == 0:
+            logger.warning("No valid gradients available, using equal weights for all objectives")
+            alpha_values = np.ones(3) / 3
+            self.mgda_alphas = alpha_values
+            # Return zero gradients to prevent further issues
+            return {key: torch.zeros_like(objectives['accuracy'][key]) for key in objectives['accuracy']}
+
+        # If only one valid gradient, use it directly
+        if len(grad_list) == 1:
+            logger.warning(f"Only {valid_obj_names[0]} gradient valid, using it directly")
+            return objectives[valid_obj_names[0]]
+
         # Construct Gram matrix
         G = np.array(grad_list)
         GG = G @ G.T
-        
+
+        # Check for NaN in Gram matrix
+        if np.isnan(GG).any() or np.isinf(GG).any():
+            logger.warning("NaN or Inf detected in Gram matrix, falling back to equal weights")
+            alpha_values = np.ones(len(grad_list)) / len(grad_list)
+            self.mgda_alphas = alpha_values
+            # Compute simple average of valid objectives
+            mixed_gradient = {}
+            for key in objectives['accuracy']:
+                weighted_sum = torch.zeros_like(objectives['accuracy'][key], dtype=torch.float32)
+                for obj_name in valid_obj_names:
+                    weighted_sum += objectives[obj_name][key]
+                weighted_sum /= len(valid_obj_names)
+                mixed_gradient[key] = weighted_sum.to(objectives['accuracy'][key].dtype)
+            return mixed_gradient
+
+        # Force symmetry to avoid numerical precision issues
+        GG = (GG + GG.T) / 2.0
+
+        # Add regularization for numerical stability and ensure PSD
+        GG = GG + 1e-6 * np.eye(len(grad_list))
+
+        # Make matrix explicitly symmetric for cvxpy
+        GG = np.asarray(GG, dtype=np.float64)
+
         # Solve QP for optimal mixing weights
         n_tasks = len(grad_list)
-        alpha = cp.Variable(n_tasks)
-        
-        # Objective: minimize ||Σ α_i g_i||^2
-        objective = cp.Minimize(cp.quad_form(alpha, GG))
-        
-        # Constraints: simplex
-        constraints = [
-            alpha >= 0,
-            cp.sum(alpha) == 1
-        ]
-        
-        # Solve with robust solver
-        problem = cp.Problem(objective, constraints)
+
         try:
+            alpha = cp.Variable(n_tasks)
+
+            # Objective: minimize ||Σ α_i g_i||^2
+            # Use cp.matrix instead of direct matrix for better compatibility
+            try:
+                GG_param = cp.Parameter((n_tasks, n_tasks), PSD=True)
+                GG_param.value = GG
+                objective = cp.Minimize(cp.quad_form(alpha, GG_param))
+            except:
+                # Fallback: simple quadratic form
+                objective = cp.Minimize(alpha @ GG @ alpha)
+
+            # Constraints: simplex
+            constraints = [
+                alpha >= 0,
+                cp.sum(alpha) == 1
+            ]
+
+            # Solve with robust solver
+            problem = cp.Problem(objective, constraints)
             problem.solve(solver=cp.CLARABEL, verbose=False)
             if alpha.value is None:
                 raise ValueError("Solver failed")
             alpha_values = alpha.value
-        except:
+        except Exception as e:
             # Fallback: equal weights
+            logger.warning(f"MGDA optimization failed: {e}. Using equal weights.")
             alpha_values = np.ones(n_tasks) / n_tasks
         
         # Store for logging
         self.mgda_alphas = alpha_values
-        
-        # Compute mixed gradient
+
+        # Compute mixed gradient using valid objectives only
         mixed_gradient = {}
-        obj_names = ['accuracy', 'worst_group', 'fairness']
 
         for key in objectives['accuracy']:
             # Compute weighted sum with NaN protection
             weighted_sum = torch.zeros_like(objectives['accuracy'][key], dtype=torch.float32)
-            for i in range(n_tasks):
-                obj_grad = objectives[obj_names[i]][key]
+            for i, obj_name in enumerate(valid_obj_names):
+                obj_grad = objectives[obj_name][key]
                 # Check for NaN in objective gradients
-                if torch.isnan(obj_grad).any():
-                    continue  # Skip NaN gradients
+                if torch.isnan(obj_grad).any() or torch.isinf(obj_grad).any():
+                    logger.warning(f"NaN/Inf in {obj_name} gradient for key {key}, skipping")
+                    continue
                 # Ensure dtype compatibility
                 if obj_grad.dtype in [torch.float16, torch.float32, torch.float64]:
                     weighted_sum += alpha_values[i] * obj_grad
@@ -509,7 +569,8 @@ class FairCareFLAggregator:
             result = weighted_sum * self.mgda_step_size
 
             # Final NaN check
-            if torch.isnan(result).any():
+            if torch.isnan(result).any() or torch.isinf(result).any():
+                logger.warning(f"NaN/Inf in mixed gradient for key {key}, using zeros")
                 result = torch.zeros_like(result)
 
             # Convert back to original dtype if needed
@@ -591,21 +652,21 @@ class FairCareFLAggregator:
             eo_violation = metrics['eo_gap'] - self.epsilon_eo
             self.lambda_eo.data = torch.clamp(
                 self.lambda_eo + self.dual_lr * eo_violation,
-                min=0.0, max=5.0
+                min=0.0, max=self.dual_max
             )
-            
+
             # False Positive Rate constraint
             fpr_violation = metrics['fpr_gap'] - self.epsilon_fpr
             self.lambda_fpr.data = torch.clamp(
                 self.lambda_fpr + self.dual_lr * fpr_violation,
-                min=0.0, max=5.0
+                min=0.0, max=self.dual_max
             )
-            
+
             # Statistical Parity constraint
             sp_violation = metrics['sp_gap'] - self.epsilon_sp
             self.lambda_sp.data = torch.clamp(
                 self.lambda_sp + self.dual_lr * sp_violation,
-                min=0.0, max=5.0
+                min=0.0, max=self.dual_max
             )
         
         # Track historical gaps for adaptive adjustment
@@ -614,44 +675,66 @@ class FairCareFLAggregator:
         return metrics
     
     def _compute_fairness_metrics(self, client_reports: List[Dict]) -> Dict[str, float]:
-        """Compute comprehensive fairness metrics."""
+        """Compute comprehensive fairness metrics with robust NaN handling."""
         group_stats = defaultdict(lambda: {
             'TP': 0.0, 'FP': 0.0, 'TN': 0.0, 'FN': 0.0,
             'total': 0
         })
-        
+
         for report in client_reports:
             for group_id, counts in report.get('group_counts', {}).items():
                 for key in ['TP', 'FP', 'TN', 'FN']:
-                    group_stats[group_id][key] += counts.get(key, 0)
-                group_stats[group_id]['total'] += sum(counts.values())
-        
-        # Compute rates for each group
-        epsilon = 1e-8
+                    val = counts.get(key, 0)
+                    # Protect against NaN in counts
+                    if not np.isnan(val) and not np.isinf(val):
+                        group_stats[group_id][key] += val
+                group_stats[group_id]['total'] += sum(
+                    v for v in counts.values() if not (np.isnan(v) or np.isinf(v))
+                )
+
+        # Compute rates for each group with larger epsilon for stability
+        epsilon = 1e-6  # Larger epsilon for better stability
         tpr_values = []
         fpr_values = []
         ppr_values = []
-        
+
         for group_id, stats in group_stats.items():
-            positive = stats['TP'] + stats['FN']
-            negative = stats['TN'] + stats['FP']
-            
+            # Skip groups with insufficient data
+            if stats['total'] < 1.0:
+                continue
+
+            positive = stats['TP'] + stats['FN'] + epsilon
+            negative = stats['TN'] + stats['FP'] + epsilon
+
             tpr = (stats['TP'] + epsilon) / (positive + epsilon)
             fpr = (stats['FP'] + epsilon) / (negative + epsilon)
             ppr = (stats['TP'] + stats['FP'] + epsilon) / (stats['total'] + epsilon)
-            
+
+            # Clamp values to [0, 1] to avoid numerical issues
+            tpr = max(0.0, min(1.0, tpr))
+            fpr = max(0.0, min(1.0, fpr))
+            ppr = max(0.0, min(1.0, ppr))
+
             tpr_values.append(tpr)
             fpr_values.append(fpr)
             ppr_values.append(ppr)
-        
-        # Compute gaps
-        eo_gap = max(tpr_values) - min(tpr_values) if tpr_values else 0.0
-        fpr_gap = max(fpr_values) - min(fpr_values) if fpr_values else 0.0
-        sp_gap = max(ppr_values) - min(ppr_values) if ppr_values else 0.0
-        
-        # Compute worst-group F1
-        wg_f1 = min(report.get('wg_f1', 0.5) for report in client_reports)
-        
+
+        # Compute gaps with fallback
+        if len(tpr_values) < 2:
+            # Not enough groups to compute gaps - return minimal gaps
+            eo_gap = 0.0
+            fpr_gap = 0.0
+            sp_gap = 0.0
+        else:
+            eo_gap = max(tpr_values) - min(tpr_values)
+            fpr_gap = max(fpr_values) - min(fpr_values)
+            sp_gap = max(ppr_values) - min(ppr_values)
+
+        # Compute worst-group F1 with fallback
+        wg_f1_values = [report.get('wg_f1', 0.0) for report in client_reports]
+        wg_f1_values = [v for v in wg_f1_values if not (np.isnan(v) or np.isinf(v))]
+        wg_f1 = min(wg_f1_values) if wg_f1_values else 0.0
+
         return {
             'eo_gap': eo_gap,
             'fpr_gap': fpr_gap,

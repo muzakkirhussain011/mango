@@ -86,11 +86,11 @@ class FairCareClient:
         self.batch_size = batch_size
         self.config = config if config is not None else {}
 
-        # CALT parameters (optimal defaults)
+        # CALT parameters (moderate values balanced with server-side optimization)
         self.prox_mu = 0.001  # FedProx regularization
-        self.lambda_irm = 0.5  # IRM penalty
-        self.lambda_adv = 0.2  # Adversarial debiasing
-        self.lambda_fair = 1.0  # Local fairness loss weight
+        self.lambda_irm = 0.1  # IRM penalty (moderate)
+        self.lambda_adv = 0.05  # Adversarial debiasing
+        self.lambda_fair = 0.2  # Local fairness loss weight
 
         # Fairness weights
         self.w_eo = 1.2  # Equal Opportunity

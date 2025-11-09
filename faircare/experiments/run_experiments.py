@@ -231,9 +231,16 @@ class FederatedExperiment:
             if scores:
                 # Probability proportional to debt (only for available clients)
                 probs = np.array([scores.get(i, 1.0) for i in available_clients])
-                probs = probs / probs.sum()
-                selected_indices = np.random.choice(len(available_clients), size=num_selected, replace=False, p=probs)
-                selected = [available_clients[i] for i in selected_indices]
+
+                # Handle NaN values in scores
+                if np.isnan(probs).any() or probs.sum() == 0:
+                    # Fallback to uniform probabilities
+                    self.logger.warning("NaN detected in fairness debt scores, using uniform selection")
+                    selected = np.random.choice(available_clients, size=num_selected, replace=False).tolist()
+                else:
+                    probs = probs / probs.sum()
+                    selected_indices = np.random.choice(len(available_clients), size=num_selected, replace=False, p=probs)
+                    selected = [available_clients[i] for i in selected_indices]
             else:
                 selected = np.random.choice(available_clients, size=num_selected, replace=False).tolist()
         else:
@@ -637,11 +644,24 @@ class FederatedExperiment:
         if 'mgda/alphas' in metrics_df.columns:
             # Parse MGDA alphas (stored as string)
             mgda_alphas = metrics_df['mgda/alphas'].apply(eval)
-            alphas_df = pd.DataFrame(mgda_alphas.tolist(), columns=['Accuracy', 'Worst-Group', 'Fairness'])
-            
-            axes[1, 1].plot(metrics_df['round'], alphas_df['Accuracy'], label='Accuracy')
-            axes[1, 1].plot(metrics_df['round'], alphas_df['Worst-Group'], label='Worst-Group')
-            axes[1, 1].plot(metrics_df['round'], alphas_df['Fairness'], label='Fairness')
+
+            # Handle variable-length alphas (due to skipped objectives)
+            all_alpha_lists = mgda_alphas.tolist()
+            max_len = max(len(a) for a in all_alpha_lists)
+
+            # Determine column names based on actual length
+            col_names = ['Accuracy', 'Worst-Group', 'Fairness'][:max_len]
+
+            # Pad shorter arrays with NaN
+            padded_alphas = []
+            for alphas in all_alpha_lists:
+                padded = list(alphas) + [np.nan] * (max_len - len(alphas))
+                padded_alphas.append(padded)
+
+            alphas_df = pd.DataFrame(padded_alphas, columns=col_names)
+
+            for col in col_names:
+                axes[1, 1].plot(metrics_df['round'], alphas_df[col], label=col, marker='o', markersize=3)
             axes[1, 1].set_xlabel('Round')
             axes[1, 1].set_ylabel('MGDA Weight')
             axes[1, 1].set_title('Multi-Objective Weights')
