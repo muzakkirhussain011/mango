@@ -77,7 +77,7 @@ class FairCareFLAggregator:
         
         # Gradient mixing parameters
         self.mgda_normalize = True
-        self.mgda_step_size = 0.8
+        self.mgda_step_size = 0.1  # Reduced for numerical stability
         self.pcgrad_enabled = True
         self.cagrad_rho = 0.7  # Higher for more conflict aversion
         
@@ -491,13 +491,31 @@ class FairCareFLAggregator:
         # Compute mixed gradient
         mixed_gradient = {}
         obj_names = ['accuracy', 'worst_group', 'fairness']
-        
+
         for key in objectives['accuracy']:
-            mixed_gradient[key] = sum(
-                alpha_values[i] * objectives[obj_names[i]][key]
-                for i in range(n_tasks)
-            ) * self.mgda_step_size
-        
+            # Compute weighted sum with NaN protection
+            weighted_sum = torch.zeros_like(objectives['accuracy'][key], dtype=torch.float32)
+            for i in range(n_tasks):
+                obj_grad = objectives[obj_names[i]][key]
+                # Check for NaN in objective gradients
+                if torch.isnan(obj_grad).any():
+                    continue  # Skip NaN gradients
+                # Ensure dtype compatibility
+                if obj_grad.dtype in [torch.float16, torch.float32, torch.float64]:
+                    weighted_sum += alpha_values[i] * obj_grad
+                else:
+                    weighted_sum += alpha_values[i] * obj_grad.float()
+
+            result = weighted_sum * self.mgda_step_size
+
+            # Final NaN check
+            if torch.isnan(result).any():
+                result = torch.zeros_like(result)
+
+            # Convert back to original dtype if needed
+            original_dtype = objectives['accuracy'][key].dtype
+            mixed_gradient[key] = result.to(original_dtype)
+
         return mixed_gradient
     
     def _pcgrad_projection(self, gradient: Dict[str, torch.Tensor],
@@ -772,12 +790,28 @@ class FairCareFLAggregator:
                      mixed_direction: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Apply the update to global model with mixed objectives."""
         new_global = {}
-        
+        max_norm = 10.0  # Gradient clipping threshold
+
         for key in global_model:
             # Combine aggregated delta with multi-objective direction
-            update = aggregated_delta[key] + 0.1 * mixed_direction.get(key, 0)
+            update = aggregated_delta[key] + 0.01 * mixed_direction.get(key, 0)  # Reduced for stability
+
+            # Clip gradient norm to prevent exploding gradients
+            if update.dtype in [torch.float16, torch.float32, torch.float64]:
+                norm = torch.norm(update)
+                if norm > max_norm:
+                    update = update * (max_norm / (norm + 1e-8))
+
+                # Check for NaN and replace with zeros
+                if torch.isnan(update).any():
+                    update = torch.zeros_like(update)
+
             new_global[key] = global_model[key] + update
-        
+
+            # Final NaN check on the new weights
+            if torch.isnan(new_global[key]).any():
+                new_global[key] = global_model[key]  # Revert to old weights
+
         return new_global
     
     def _perform_distillation(self, new_global: Dict[str, torch.Tensor],

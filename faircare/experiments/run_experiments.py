@@ -432,7 +432,12 @@ class FederatedExperiment:
         
         # AUROC (for binary classification)
         if self.data_info['num_classes'] == 2:
-            metrics[f'{prefix}/auroc'] = roc_auc_score(all_targets, all_probs[:, 1])
+            # Check for NaN in probabilities
+            if np.isnan(all_probs).any():
+                self.logger.warning(f"NaN detected in predictions, skipping AUROC")
+                metrics[f'{prefix}/auroc'] = 0.5  # Random baseline
+            else:
+                metrics[f'{prefix}/auroc'] = roc_auc_score(all_targets, all_probs[:, 1])
         
         # Fairness metrics
         fairness_metrics = compute_fairness_metrics(

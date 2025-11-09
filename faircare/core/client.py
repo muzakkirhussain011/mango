@@ -751,8 +751,9 @@ class FairCareClient:
                 bin_weight = in_bin.float().mean()
                 
                 ece += bin_weight * torch.abs(bin_accuracy - bin_confidence)
-        
-        return ece.item()
+
+        # Handle both tensor and float cases
+        return ece.item() if isinstance(ece, torch.Tensor) else ece
     
     def _compute_delta(self, initial_weights: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Compute model weight delta."""
