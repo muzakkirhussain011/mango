@@ -49,34 +49,44 @@ def load_experiment_results(results_dir: Path) -> pd.DataFrame:
 
                 seed = int(seed_dir.name.replace('seed', ''))
 
-                # Load metrics from CSV if available
-                metrics_file = seed_dir / 'metrics.csv'
-                if metrics_file.exists():
+                # Find the latest timestamped subdirectory
+                timestamped_dirs = [d for d in seed_dir.iterdir() if d.is_dir()]
+                if not timestamped_dirs:
+                    print(f"[WARN] No timestamped directories found in {seed_dir}")
+                    continue
+
+                # Sort by name (which includes timestamp) to get latest
+                latest_dir = sorted(timestamped_dirs, reverse=True)[0]
+
+                # Load final_results.json from the latest directory
+                results_file = latest_dir / 'final_results.json'
+                if results_file.exists():
                     try:
-                        df = pd.read_csv(metrics_file)
-                        # Get final (best) metrics
-                        if len(df) > 0:
-                            final_metrics = df.iloc[-1].to_dict()
+                        with open(results_file, 'r') as f:
+                            data = json.load(f)
 
-                            # Extract test metrics
-                            test_metrics = {k: v for k, v in final_metrics.items()
-                                          if k.startswith('test/')}
+                        # Extract test metrics from nested structure
+                        if 'final_metrics' in data:
+                            final_metrics = data['final_metrics']
+                        else:
+                            final_metrics = data
 
-                            result = {
-                                'algorithm': algo_name,
-                                'dataset': dataset_name,
-                                'seed': seed,
-                                **test_metrics
-                            }
-                            results.append(result)
+                        # Filter test metrics
+                        test_metrics = {k: v for k, v in final_metrics.items()
+                                      if k.startswith('test/')}
+
+                        result = {
+                            'algorithm': algo_name,
+                            'dataset': dataset_name,
+                            'seed': seed,
+                            **test_metrics
+                        }
+                        results.append(result)
+                        print(f"[OK] Loaded: {algo_name}/{dataset_name}/seed{seed} from {latest_dir.name}")
                     except Exception as e:
-                        print(f"Error loading {metrics_file}: {e}")
-
-                # Also check for config to get experiment details
-                config_file = seed_dir / 'config.yaml'
-                if config_file.exists() and not metrics_file.exists():
-                    # Try to load from experiment log or other sources
-                    pass
+                        print(f"[ERROR] Error loading {results_file}: {e}")
+                else:
+                    print(f"[WARN] Results file not found: {results_file}")
 
     return pd.DataFrame(results)
 

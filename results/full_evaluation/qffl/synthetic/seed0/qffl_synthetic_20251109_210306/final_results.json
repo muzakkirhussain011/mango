@@ -1,0 +1,46 @@
+{
+  "algorithm": "qffl",
+  "dataset": "synthetic",
+  "total_rounds": 20,
+  "best_round": 1,
+  "total_time": 4.24136757850647,
+  "final_metrics": {
+    "test/loss": 0.7058333903551102,
+    "test/accuracy": 0.534,
+    "test/macro_f1": 0.35196773744958976,
+    "test/auroc": 0.505721044754502,
+    "test/eo_gap": 0.007575757575757576,
+    "test/fpr_gap": 0.014285714285714285,
+    "test/sp_gap": 0.004473135769836831,
+    "test/worst_group_f1": 0.0,
+    "test/worst_group_accuracy": 0.31413612565445026
+  },
+  "config": {
+    "algorithm": "qffl",
+    "dataset": "synthetic",
+    "task": "mortality",
+    "sensitive_attr": "sex",
+    "rounds": 20,
+    "local_epochs": 1,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "client_fraction": 0.3,
+    "num_clients": 10,
+    "dirichlet_alpha": 0.3,
+    "model": {
+      "type": "mlp",
+      "hidden_dims": [
+        256,
+        128
+      ]
+    },
+    "seed": 0,
+    "save_dir": "results/full_evaluation/qffl/synthetic/seed0",
+    "experiment_name": "qffl_synthetic",
+    "early_stopping": {
+      "enabled": false,
+      "patience": 20,
+      "monitor": "val/worst_group_f1"
+    }
+  }
+}

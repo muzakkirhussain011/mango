@@ -1,0 +1,46 @@
+{
+  "algorithm": "faircare_fl",
+  "dataset": "synthetic",
+  "total_rounds": 20,
+  "best_round": 1,
+  "total_time": 23.075924158096313,
+  "final_metrics": {
+    "test/loss": 0.6959175616502762,
+    "test/accuracy": 0.534,
+    "test/macro_f1": 0.4738957455552093,
+    "test/auroc": 0.49761019649495486,
+    "test/eo_gap": 0.03535353535353536,
+    "test/fpr_gap": 0.004035512510088768,
+    "test/sp_gap": 0.0237211745370135,
+    "test/worst_group_f1": 0.24050632440394176,
+    "test/worst_group_accuracy": 0.4083769633507853
+  },
+  "config": {
+    "algorithm": "faircare_fl",
+    "dataset": "synthetic",
+    "task": "mortality",
+    "sensitive_attr": "sex",
+    "rounds": 20,
+    "local_epochs": 1,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "client_fraction": 0.3,
+    "num_clients": 10,
+    "dirichlet_alpha": 0.3,
+    "model": {
+      "type": "mlp",
+      "hidden_dims": [
+        256,
+        128
+      ]
+    },
+    "seed": 3,
+    "save_dir": "results/full_evaluation/faircare_fl/synthetic/seed3",
+    "experiment_name": "faircare_fl_synthetic",
+    "early_stopping": {
+      "enabled": false,
+      "patience": 20,
+      "monitor": "val/worst_group_f1"
+    }
+  }
+}

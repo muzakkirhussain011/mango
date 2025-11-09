@@ -39,17 +39,9 @@ for dataset in "${DATASETS[@]}"; do
 done
 
 echo ""
-echo "Running statistical analysis..."
-python -m faircare.experiments.run_sweep \
-    --config faircare/experiments/configs/search.yaml \
-    --output_dir results/full_evaluation/summary
-
-echo ""
-echo "Generating tables and figures..."
-python -m paper.tables
-python -m paper.make_figures
-
-echo ""
 echo "======================================="
 echo "Evaluation complete!"
 echo "Results saved to: results/full_evaluation/"
+echo ""
+echo "Note: Statistical analysis and paper generation steps skipped."
+echo "Run them manually if needed."

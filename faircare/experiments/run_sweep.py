@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
 
-from run_experiments import FederatedExperiment
+from faircare.experiments.run_experiments import FederatedExperiment
 
 
 # Optimal hyperparameters for each algorithm
