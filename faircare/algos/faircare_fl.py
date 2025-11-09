@@ -241,8 +241,13 @@ class FairCareFLAggregator:
             for report in client_reports:
                 # Weight by sample count and inverse loss
                 weight = report['n_samples'] / total_samples
-                loss_factor = torch.exp(-report['val_loss'])
-                weighted_sum += weight * loss_factor * report['delta'][key]
+                loss_factor = torch.exp(-torch.tensor(report['val_loss'], dtype=torch.float32))
+                delta = report['delta'][key]
+                # Ensure dtype compatibility
+                if delta.dtype in [torch.float16, torch.float32, torch.float64]:
+                    weighted_sum += weight * loss_factor * delta
+                else:
+                    weighted_sum += (weight * loss_factor * delta.float()).to(delta.dtype)
             
             acc_gradient[key] = weighted_sum
         
@@ -307,7 +312,12 @@ class FairCareFLAggregator:
             for i, report in enumerate(client_reports):
                 # Estimate client's contribution to worst groups
                 client_wg_score = 1.0 / (report.get('wg_f1', 0.5) + 0.1)
-                weighted_sum += client_wg_score * report['delta'][key]
+                delta = report['delta'][key]
+                # Ensure dtype compatibility
+                if delta.dtype in [torch.float16, torch.float32, torch.float64]:
+                    weighted_sum += client_wg_score * delta
+                else:
+                    weighted_sum += (client_wg_score * delta.float()).to(delta.dtype)
             
             wg_gradient[key] = weighted_sum / len(client_reports)
         
@@ -371,12 +381,17 @@ class FairCareFLAggregator:
             for report in client_reports:
                 # Weight by inverse fairness contribution
                 fairness_weight = torch.exp(-fairness_loss * 0.5)
-                
+
                 # Additional weight based on group balance
                 group_balance = self._compute_group_balance(report.get('group_counts', {}))
-                
+
                 combined_weight = fairness_weight * (2.0 - group_balance)
-                weighted_sum += combined_weight * report['delta'][key]
+                delta = report['delta'][key]
+                # Ensure dtype compatibility
+                if delta.dtype in [torch.float16, torch.float32, torch.float64]:
+                    weighted_sum += combined_weight * delta
+                else:
+                    weighted_sum += (combined_weight * delta.float()).to(delta.dtype)
             
             fair_gradient[key] = weighted_sum / len(client_reports)
         
@@ -729,7 +744,12 @@ class FairCareFLAggregator:
             weighted_sum = torch.zeros_like(client_reports[0]['delta'][key])
             
             for i, report in enumerate(client_reports):
-                weighted_sum += weights[i] * report['delta'][key]
+                delta = report['delta'][key]
+                # Ensure dtype compatibility
+                if delta.dtype in [torch.float16, torch.float32, torch.float64]:
+                    weighted_sum += weights[i] * delta
+                else:
+                    weighted_sum += (weights[i] * delta.float()).to(delta.dtype)
             
             aggregated[key] = weighted_sum
         
