@@ -190,7 +190,7 @@ class FederatedExperiment:
         
         if algo_name == 'faircare_fl':
             self.aggregator = FairCareFLAggregator(self.algo_config, self.device)
-        elif algo_name in ['fedavg', 'qffl', 'afl', 'fairfate']:
+        elif algo_name in ['fedavg', 'qffl', 'afl', 'fairfed']:
             # Use FedAvg aggregator for these algorithms
             # They differ mainly in client training, not aggregation
             from faircare.algos.fedavg import FedAvgAggregator

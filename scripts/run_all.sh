@@ -10,7 +10,7 @@ echo "======================================="
 mkdir -p results/full_evaluation
 
 # Run experiments for each algorithm and dataset
-ALGORITHMS=("fedavg" "fedprox" "qffl" "afl" "fairfate" "faircare_fl")
+ALGORITHMS=("fedavg" "fedprox" "qffl" "afl" "fairfed" "faircare_fl")
 DATASETS=("adult" "heart" "synth_health")
 SEEDS=(0 1 2 3 4)
 
