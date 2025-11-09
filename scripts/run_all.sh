@@ -11,7 +11,7 @@ mkdir -p results/full_evaluation
 
 # Run experiments for each algorithm and dataset
 ALGORITHMS=("fedavg" "fedprox" "qffl" "afl" "fairfed" "faircare_fl")
-DATASETS=("adult" "heart" "synth_health")
+DATASETS=("adult" "compas" "synthetic")
 SEEDS=(0 1 2 3 4)
 
 for dataset in "${DATASETS[@]}"; do
