@@ -78,12 +78,13 @@ class FairCareClient:
             device: Device for computation
         """
         self.client_id = client_id
-        self.model = model.to(device)
+        # Ensure device is CPU if CUDA is not available
+        self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
+        self.model = model.to(self.device)
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.batch_size = batch_size
         self.config = config if config is not None else {}
-        self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
 
         # CALT parameters (optimal defaults)
         self.prox_mu = 0.001  # FedProx regularization
@@ -769,11 +770,12 @@ class FairCareClient:
         else:
             loss_drift = 0.0
         
-        # Delta norm
+        # Delta norm (only for floating point tensors)
         current_weights = self.model.state_dict()
         delta_norm = sum(
-            torch.norm(param).item() ** 2
+            torch.norm(param.float()).item() ** 2
             for param in current_weights.values()
+            if param.dtype in [torch.float16, torch.float32, torch.float64]
         ) ** 0.5
         
         # ECE proxy for calibration
