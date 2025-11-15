@@ -1,18 +1,21 @@
 """
-FairCare-FL v2.0.0: Next-generation multi-objective federated learning.
+FairCare-FL v2.1.0: Next-generation multi-objective federated learning.
 State-of-the-art server aggregator with PFA (Pareto Fair Aggregation) pipeline.
+
+ENHANCED: Feature-flagged configuration system for all enhancements
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Union
 from dataclasses import dataclass
 import logging
 from collections import defaultdict
 import cvxpy as cp
 from faircare.algos.aggregator import BaseAggregator, register_aggregator
+from faircare.config import FairCareFLConfig
 
 logger = logging.getLogger(__name__)
 
@@ -57,70 +60,155 @@ class DFBDNetwork(nn.Module):
 
 
 class FairCareFLAggregator:
-    """Next-generation FairCare-FL server with full PFA pipeline."""
-    
-    def __init__(self, config: Dict[str, Any], device: str = 'cuda'):
-        """Initialize the next-gen FairCare-FL aggregator.
-        
+    """Next-generation FairCare-FL server with full PFA pipeline.
+
+    ENHANCED v2.1.0: Feature-flagged configuration system with backward compatibility
+    """
+
+    def __init__(self, config: Union[Dict[str, Any], FairCareFLConfig], device: str = 'cuda'):
+        """Initialize FairCare-FL aggregator with enhanced configuration support.
+
         Args:
-            config: Algorithm configuration
+            config: Algorithm configuration (Dict for legacy or FairCareFLConfig for enhanced)
             device: Device for tensor operations
         """
-        self.config = config
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
-        self.version = "2.0.0"
+        self.version = "2.1.0"
         self.round_counter = 0
-        
-        # Multi-objective optimization parameters
-        self.server_momentum = 0.3  # Moderate momentum for stability without collapse
+
+        # Backward compatibility layer: Convert old dict config to FairCareFLConfig
+        if isinstance(config, dict):
+            # Legacy mode: Use old behavior (all enhancements disabled)
+            logger.info("[FairCare-FL] Using legacy dict config - all enhancements DISABLED")
+            self.enh_config = FairCareFLConfig.create_legacy()
+            self.legacy_dict_config = config
+        elif isinstance(config, FairCareFLConfig):
+            # New mode: Use enhanced config with feature flags
+            logger.info(f"[FairCare-FL] Using enhanced config (legacy_mode={config.legacy_mode})")
+            self.enh_config = config
+            self.legacy_dict_config = {}
+        else:
+            raise TypeError(f"config must be Dict or FairCareFLConfig, got {type(config)}")
+
+        # Initialize parameters based on configuration
+        self._init_multi_objective_params()
+        self._init_dual_variables()
+        self._init_weight_constraints()
+        self._init_dfbd_network()
+        self._init_selection_params()
+        self._init_distillation_params()
+        self._init_tracking()
+
+    def _init_multi_objective_params(self):
+        """Initialize multi-objective optimization parameters."""
+        cfg = self.enh_config.aggregate
+
+        if cfg.enable and not self.enh_config.legacy_mode:
+            # Enhanced mode: Use config values
+            self.server_momentum = cfg.server_momentum
+            self.mgda_normalize = cfg.mgda_normalize
+            self.pcgrad_enabled = (cfg.moo_method == 'pcgrad')
+            self.cagrad_enabled = (cfg.moo_method == 'cagrad')
+            self.mgda_enabled = (cfg.moo_method == 'mgda')
+            self.cagrad_rho = 0.7
+            self.mgda_step_size = 0.01
+        else:
+            # Legacy mode: Use hardcoded v2.0.0 defaults
+            self.server_momentum = 0.3
+            self.mgda_normalize = True
+            self.mgda_step_size = 0.01
+            self.pcgrad_enabled = True
+            self.cagrad_enabled = False
+            self.mgda_enabled = True
+            self.cagrad_rho = 0.7
+
         self.momentum_buffer = None
-        
-        # Gradient mixing parameters
-        self.mgda_normalize = True
-        self.mgda_step_size = 0.01  # Very small for stability - fairness signal is strong
-        self.pcgrad_enabled = True  # Re-enabled with lower momentum
-        self.cagrad_rho = 0.7  # Higher for more conflict aversion
-        
-        # Fairness dual variables (Lagrangian multipliers)
+
+    def _init_dual_variables(self):
+        """Initialize fairness dual variables (Lagrangian multipliers)."""
         self.lambda_eo = nn.Parameter(torch.tensor(0.0, device=self.device))
         self.lambda_fpr = nn.Parameter(torch.tensor(0.0, device=self.device))
         self.lambda_sp = nn.Parameter(torch.tensor(0.0, device=self.device))
-        self.dual_lr = 0.005  # Ultra-gentle dual ascent for GPU stability
-        self.dual_max = 0.5  # Conservative cap to prevent dominance
+        self.dual_lr = 0.005
+        self.dual_max = self.enh_config.stability.dual_max_value
         self.epsilon_eo = 0.015
         self.epsilon_fpr = 0.015
         self.epsilon_sp = 0.02
-        
+
         # Fairness weights (adaptive)
         self.w_eo = 1.2
         self.w_fpr = 1.2
         self.w_sp = 0.8
-        
-        # DFBD network for bias detection
+
+    def _init_weight_constraints(self):
+        """Initialize weight constraint parameters."""
+        cfg = self.enh_config.aggregate
+
+        if cfg.enable and cfg.clamp_weights and not self.enh_config.legacy_mode:
+            self.weight_floor = cfg.weight_min
+            self.weight_cap = cfg.weight_max
+            self.tau = cfg.softmin_temperature
+        else:
+            # Legacy defaults
+            self.weight_floor = 0.005
+            self.weight_cap = 0.15
+            self.tau = 0.5
+
+    def _init_dfbd_network(self):
+        """Initialize DFBD (Demographics-Free Bias Detection) network."""
+        # Always initialize DFBD network (used in current implementation)
         self.dfbd_network = DFBDNetwork(
             input_dim=3,
             hidden_dim=128,
             depth=3
         ).to(self.device)
         self.dfbd_optimizer = torch.optim.Adam(self.dfbd_network.parameters(), lr=0.001)
-        self.dfbd_eta = 2.0  # Amplification factor
-        
-        # Fairness-aware selection (Lyapunov-based)
+        self.dfbd_eta = 2.0
+
+    def _init_selection_params(self):
+        """Initialize fair client selection parameters."""
+        cfg = self.enh_config.selection
+
         self.fairness_debt_scores = defaultdict(float)
+
+        if cfg.enable and not self.enh_config.legacy_mode:
+            # Enhanced selection enabled
+            self.selection_enabled = True
+            self.selection_strategy = cfg.strategy
+            self.selection_recency_bonus = cfg.recency_bonus
+            self.selection_loss_bonus = cfg.loss_bonus
+            self.selection_underpart_bonus = cfg.underparticipation_bonus
+        else:
+            # Legacy selection (minimal)
+            self.selection_enabled = False
+            self.selection_strategy = 'random'
+            self.selection_recency_bonus = 0.0
+            self.selection_loss_bonus = 0.0
+            self.selection_underpart_bonus = 0.0
+
+        # Legacy parameters (kept for compatibility)
         self.selection_tau = 0.015
         self.selection_kappa = 0.6
-        
-        # Weight constraints
-        self.weight_floor = 0.005
-        self.weight_cap = 0.15
-        self.tau = 0.5  # Temperature for log-sum-exp
-        
-        # Distillation parameters
-        self.distill_temperature = 3.0
+
+    def _init_distillation_params(self):
+        """Initialize knowledge distillation parameters."""
+        cfg = self.enh_config.distill
+
+        if cfg.enable and not self.enh_config.legacy_mode:
+            self.distill_enabled = True
+            self.distill_temperature = cfg.temperature
+            self.distill_alpha = cfg.alpha
+        else:
+            # Legacy: Distillation always active in v2.0.0
+            self.distill_enabled = True  # Keep legacy behavior
+            self.distill_temperature = 3.0
+            self.distill_alpha = 0.5
+
         self.distill_steps = 300
         self.distill_batch_size = 128
-        
-        # Track metrics for adaptive adjustments
+
+    def _init_tracking(self):
+        """Initialize metric tracking."""
         self.historical_gaps = {'eo': [], 'fpr': [], 'sp': []}
         self.gap_momentum = 0.95
         
@@ -793,47 +881,144 @@ class FairCareFLAggregator:
     def _compute_optimal_weights(self, client_reports: List[Dict],
                                 tilts: torch.Tensor,
                                 fairness_metrics: Dict[str, float]) -> torch.Tensor:
-        """Compute optimal aggregation weights combining multiple signals."""
+        """Compute optimal aggregation weights combining multiple signals.
+
+        ENHANCED: Supports configurable weighting methods (softmin, sample_prop, uniform)
+        """
+        cfg = self.enh_config.aggregate
         n_clients = len(client_reports)
-        
+
+        # CONDITIONAL: Enhanced weight computation
+        if cfg.enable and not self.enh_config.legacy_mode:
+            weights = self._compute_enhanced_weights(client_reports, tilts, fairness_metrics)
+        else:
+            # LEGACY: Original v2.0.0 weight computation
+            weights = self._compute_legacy_weights(client_reports, tilts, fairness_metrics)
+
+        return weights
+
+    def _compute_enhanced_weights(self, client_reports: List[Dict],
+                                 tilts: torch.Tensor,
+                                 fairness_metrics: Dict[str, float]) -> torch.Tensor:
+        """Enhanced weight computation with configurable methods."""
+        cfg = self.enh_config.aggregate
+
+        # Step 1: Compute base weights using configured method
+        if cfg.weight_method == 'softmin':
+            base_weights = self._compute_softmin_weights(client_reports, cfg.softmin_temperature)
+        elif cfg.weight_method == 'uniform':
+            base_weights = self._compute_uniform_weights(len(client_reports))
+        elif cfg.weight_method == 'sample_prop':
+            base_weights = self._compute_sample_proportional_weights(client_reports)
+        else:
+            # Default to legacy
+            base_weights = self._compute_legacy_weights(client_reports, tilts, fairness_metrics)
+            return base_weights
+
+        # Step 2: Combine with fairness signal if configured
+        if cfg.acc_weight != 1.0 or cfg.fairness_weight != 1.0:
+            fairness_weights = torch.tensor(
+                [r.get('wg_f1', 0.5) for r in client_reports],
+                device=self.device, dtype=torch.float32
+            )
+            fairness_weights = fairness_weights / (fairness_weights.sum() + 1e-8)
+
+            # Weighted combination
+            total_weight = cfg.acc_weight + cfg.fairness_weight
+            combined_weights = (
+                (cfg.acc_weight / total_weight) * base_weights +
+                (cfg.fairness_weight / total_weight) * fairness_weights
+            )
+        else:
+            combined_weights = base_weights
+
+        # Step 3: Apply DFBD tilts
+        weighted_tilts = combined_weights * tilts
+
+        # Step 4: Normalize
+        final_weights = weighted_tilts / (weighted_tilts.sum() + 1e-8)
+
+        # Step 5: Apply weight clamping if enabled
+        if cfg.clamp_weights:
+            final_weights = torch.clamp(final_weights, cfg.weight_min, cfg.weight_max)
+            final_weights = final_weights / (final_weights.sum() + 1e-8)
+
+        return final_weights
+
+    def _compute_softmin_weights(self, client_reports: List[Dict], temperature: float) -> torch.Tensor:
+        """Compute weights using softmin with temperature control.
+
+        Lower temperature = more aggressive fairness (focus on high-loss clients)
+        Higher temperature = gentler fairness (closer to uniform)
+        """
+        losses = torch.tensor(
+            [r['val_loss'] for r in client_reports],
+            device=self.device, dtype=torch.float32
+        )
+
+        # Softmin: exp(-loss/tau) / sum(exp(-loss/tau))
+        # This prioritizes LOW loss clients (good performers)
+        # For fairness, we want to prioritize HIGH loss clients, so we use softmax on losses
+        weights = F.softmax(losses / temperature, dim=0)
+
+        return weights
+
+    def _compute_uniform_weights(self, n_clients: int) -> torch.Tensor:
+        """Compute uniform weights (all clients equal)."""
+        return torch.ones(n_clients, device=self.device, dtype=torch.float32) / n_clients
+
+    def _compute_sample_proportional_weights(self, client_reports: List[Dict]) -> torch.Tensor:
+        """Compute sample-proportional weights (FedAvg-style)."""
+        sample_counts = torch.tensor(
+            [r['n_samples'] for r in client_reports],
+            device=self.device, dtype=torch.float32
+        )
+        return sample_counts / (sample_counts.sum() + 1e-8)
+
+    def _compute_legacy_weights(self, client_reports: List[Dict],
+                               tilts: torch.Tensor,
+                               fairness_metrics: Dict[str, float]) -> torch.Tensor:
+        """Legacy v2.0.0 weight computation (original implementation)."""
+        n_clients = len(client_reports)
+
         # Base weights from sample counts
         sample_weights = torch.tensor(
             [r['n_samples'] for r in client_reports],
             device=self.device, dtype=torch.float32
         )
         sample_weights = sample_weights / sample_weights.sum()
-        
+
         # Performance weights (inverse loss)
         loss_weights = torch.tensor(
             [np.exp(-r['val_loss']) for r in client_reports],
             device=self.device, dtype=torch.float32
         )
         loss_weights = loss_weights / loss_weights.sum()
-        
+
         # Fairness weights (boost clients with good worst-group performance)
         fairness_weights = torch.tensor(
             [r.get('wg_f1', 0.5) for r in client_reports],
             device=self.device, dtype=torch.float32
         )
         fairness_weights = fairness_weights / fairness_weights.sum()
-        
+
         # Combine all signals
         combined_weights = (
             0.4 * sample_weights +
             0.3 * loss_weights +
             0.3 * fairness_weights
         )
-        
+
         # Apply DFBD tilts
         weighted_tilts = combined_weights * tilts
-        
+
         # Normalize and apply constraints
         final_weights = weighted_tilts / weighted_tilts.sum()
         final_weights = torch.clamp(final_weights, self.weight_floor, self.weight_cap)
-        
+
         # Renormalize after clamping
         final_weights = final_weights / final_weights.sum()
-        
+
         return final_weights
     
     def _weighted_aggregate_with_momentum(self, client_reports: List[Dict],
@@ -989,7 +1174,7 @@ class FairCareFLAggregator:
             
             # Privacy flags
             'privacy/sa_enabled': False,  # Would be set based on config
-            'privacy/dp_enabled': self.config.get('dp', {}).get('enabled', False)
+            'privacy/dp_enabled': self.legacy_dict_config.get('dp', {}).get('enabled', False)
         }
         
         return logs

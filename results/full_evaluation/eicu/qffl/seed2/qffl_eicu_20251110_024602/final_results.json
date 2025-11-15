@@ -1,0 +1,46 @@
+{
+  "algorithm": "qffl",
+  "dataset": "eicu",
+  "total_rounds": 20,
+  "best_round": 1,
+  "total_time": 5.374119997024536,
+  "final_metrics": {
+    "test/loss": 0.6985038774354118,
+    "test/accuracy": 0.50125,
+    "test/macro_f1": 0.4977270259680793,
+    "test/auroc": 0.505998197073712,
+    "test/eo_gap": 0.036647173489278706,
+    "test/fpr_gap": 0.033928158928158925,
+    "test/sp_gap": 0.028060961795901562,
+    "test/worst_group_f1": 0.34104045764927,
+    "test/worst_group_accuracy": 0.48493975903614456
+  },
+  "config": {
+    "algorithm": "qffl",
+    "dataset": "eicu",
+    "task": "mortality",
+    "sensitive_attr": "sex",
+    "rounds": 20,
+    "local_epochs": 1,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "client_fraction": 0.3,
+    "num_clients": 10,
+    "dirichlet_alpha": 0.3,
+    "model": {
+      "type": "mlp",
+      "hidden_dims": [
+        256,
+        128
+      ]
+    },
+    "seed": 2,
+    "save_dir": "results/full_evaluation/eicu/qffl/seed2",
+    "experiment_name": "qffl_eicu",
+    "early_stopping": {
+      "enabled": false,
+      "patience": 20,
+      "monitor": "val/worst_group_f1"
+    }
+  }
+}

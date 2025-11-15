@@ -1,0 +1,46 @@
+{
+  "algorithm": "fairfed",
+  "dataset": "compas",
+  "total_rounds": 20,
+  "best_round": 1,
+  "total_time": 3.223424196243286,
+  "final_metrics": {
+    "test/loss": 0.7137780785560608,
+    "test/accuracy": 0.474,
+    "test/macro_f1": 0.43263941322403193,
+    "test/auroc": 0.5255153768164921,
+    "test/eo_gap": 0.012626262626262541,
+    "test/fpr_gap": 0.06109765940274414,
+    "test/sp_gap": 0.01972246225791696,
+    "test/worst_group_f1": 0.45014244606683385,
+    "test/worst_group_accuracy": 0.37540453074433655
+  },
+  "config": {
+    "algorithm": "fairfed",
+    "dataset": "compas",
+    "task": "mortality",
+    "sensitive_attr": "sex",
+    "rounds": 20,
+    "local_epochs": 1,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "client_fraction": 0.3,
+    "num_clients": 10,
+    "dirichlet_alpha": 0.3,
+    "model": {
+      "type": "mlp",
+      "hidden_dims": [
+        256,
+        128
+      ]
+    },
+    "seed": 2,
+    "save_dir": "results/full_evaluation/compas/fairfed/seed2",
+    "experiment_name": "fairfed_compas",
+    "early_stopping": {
+      "enabled": false,
+      "patience": 20,
+      "monitor": "val/worst_group_f1"
+    }
+  }
+}

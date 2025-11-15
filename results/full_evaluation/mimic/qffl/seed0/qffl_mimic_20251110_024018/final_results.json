@@ -1,0 +1,46 @@
+{
+  "algorithm": "qffl",
+  "dataset": "mimic",
+  "total_rounds": 20,
+  "best_round": 1,
+  "total_time": 6.967989921569824,
+  "final_metrics": {
+    "test/loss": 0.7026872709393501,
+    "test/accuracy": 0.494,
+    "test/macro_f1": 0.4915083911164707,
+    "test/auroc": 0.5022262943852374,
+    "test/eo_gap": 0.009387323266326852,
+    "test/fpr_gap": 0.01860739575137682,
+    "test/sp_gap": 0.010872497147006888,
+    "test/worst_group_f1": 0.4131627011756999,
+    "test/worst_group_accuracy": 0.46050420168067224
+  },
+  "config": {
+    "algorithm": "qffl",
+    "dataset": "mimic",
+    "task": "mortality",
+    "sensitive_attr": "sex",
+    "rounds": 20,
+    "local_epochs": 1,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "client_fraction": 0.3,
+    "num_clients": 10,
+    "dirichlet_alpha": 0.3,
+    "model": {
+      "type": "mlp",
+      "hidden_dims": [
+        256,
+        128
+      ]
+    },
+    "seed": 0,
+    "save_dir": "results/full_evaluation/mimic/qffl/seed0",
+    "experiment_name": "qffl_mimic",
+    "early_stopping": {
+      "enabled": false,
+      "patience": 20,
+      "monitor": "val/worst_group_f1"
+    }
+  }
+}

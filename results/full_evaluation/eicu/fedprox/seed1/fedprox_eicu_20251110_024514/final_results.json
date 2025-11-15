@@ -1,0 +1,46 @@
+{
+  "algorithm": "fedprox",
+  "dataset": "eicu",
+  "total_rounds": 20,
+  "best_round": 1,
+  "total_time": 5.214942216873169,
+  "final_metrics": {
+    "test/loss": 0.6973158035959516,
+    "test/accuracy": 0.54625,
+    "test/macro_f1": 0.4236254041469596,
+    "test/auroc": 0.5119743303641786,
+    "test/eo_gap": 0.031189083820662766,
+    "test/fpr_gap": 0.039010164010164,
+    "test/sp_gap": 0.004016064257028121,
+    "test/worst_group_f1": 0.1149425252444181,
+    "test/worst_group_accuracy": 0.3704819277108434
+  },
+  "config": {
+    "algorithm": "fedprox",
+    "dataset": "eicu",
+    "task": "mortality",
+    "sensitive_attr": "sex",
+    "rounds": 20,
+    "local_epochs": 1,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "client_fraction": 0.3,
+    "num_clients": 10,
+    "dirichlet_alpha": 0.3,
+    "model": {
+      "type": "mlp",
+      "hidden_dims": [
+        256,
+        128
+      ]
+    },
+    "seed": 1,
+    "save_dir": "results/full_evaluation/eicu/fedprox/seed1",
+    "experiment_name": "fedprox_eicu",
+    "early_stopping": {
+      "enabled": false,
+      "patience": 20,
+      "monitor": "val/worst_group_f1"
+    }
+  }
+}

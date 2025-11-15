@@ -1,0 +1,46 @@
+{
+  "algorithm": "afl",
+  "dataset": "adult",
+  "total_rounds": 20,
+  "best_round": 1,
+  "total_time": 11.556031703948975,
+  "final_metrics": {
+    "test/loss": 0.7042728861172994,
+    "test/accuracy": 0.47733333333333333,
+    "test/macro_f1": 0.4527371518877776,
+    "test/auroc": 0.5084344247629271,
+    "test/eo_gap": 0.06433030570961606,
+    "test/fpr_gap": 0.03077502150846001,
+    "test/sp_gap": 0.019280668544254143,
+    "test/worst_group_f1": 0.43783208949956015,
+    "test/worst_group_accuracy": 0.40893854748603353
+  },
+  "config": {
+    "algorithm": "afl",
+    "dataset": "adult",
+    "task": "mortality",
+    "sensitive_attr": "sex",
+    "rounds": 20,
+    "local_epochs": 1,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "client_fraction": 0.3,
+    "num_clients": 10,
+    "dirichlet_alpha": 0.3,
+    "model": {
+      "type": "mlp",
+      "hidden_dims": [
+        256,
+        128
+      ]
+    },
+    "seed": 0,
+    "save_dir": "results/full_evaluation/adult/afl/seed0",
+    "experiment_name": "afl_adult",
+    "early_stopping": {
+      "enabled": false,
+      "patience": 20,
+      "monitor": "val/worst_group_f1"
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "algorithm": "fedavg",
+  "dataset": "mimic",
+  "total_rounds": 20,
+  "best_round": 1,
+  "total_time": 6.46418571472168,
+  "final_metrics": {
+    "test/loss": 0.700129434466362,
+    "test/accuracy": 0.536,
+    "test/macro_f1": 0.3893933412291091,
+    "test/auroc": 0.5027607657809713,
+    "test/eo_gap": 0.019101663941521588,
+    "test/fpr_gap": 0.03280881195908733,
+    "test/sp_gap": 0.025645813881108002,
+    "test/worst_group_f1": 0.06829268115930998,
+    "test/worst_group_accuracy": 0.32592592592592595
+  },
+  "config": {
+    "algorithm": "fedavg",
+    "dataset": "mimic",
+    "task": "mortality",
+    "sensitive_attr": "sex",
+    "rounds": 20,
+    "local_epochs": 1,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "client_fraction": 0.3,
+    "num_clients": 10,
+    "dirichlet_alpha": 0.3,
+    "model": {
+      "type": "mlp",
+      "hidden_dims": [
+        256,
+        128
+      ]
+    },
+    "seed": 1,
+    "save_dir": "results/full_evaluation/mimic/fedavg/seed1",
+    "experiment_name": "fedavg_mimic",
+    "early_stopping": {
+      "enabled": false,
+      "patience": 20,
+      "monitor": "val/worst_group_f1"
+    }
+  }
+}

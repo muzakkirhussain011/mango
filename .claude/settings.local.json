@@ -8,7 +8,10 @@
       "Bash(bash scripts/run_all.sh:*)",
       "Bash(done)",
       "Bash(while read algo)",
-      "Bash(for d in */)"
+      "Bash(for d in */)",
+      "Bash(chmod:*)",
+      "Bash(bash scripts/run_fixed_baselines.sh:*)",
+      "Bash(bash:*)"
     ],
     "deny": [],
     "ask": []

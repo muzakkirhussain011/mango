@@ -1,0 +1,46 @@
+{
+  "algorithm": "fairfed",
+  "dataset": "mimic",
+  "total_rounds": 20,
+  "best_round": 1,
+  "total_time": 6.61279296875,
+  "final_metrics": {
+    "test/loss": 0.8310601860284805,
+    "test/accuracy": 0.534,
+    "test/macro_f1": 0.34810951760104303,
+    "test/auroc": 0.48912571731687315,
+    "test/eo_gap": 0.0,
+    "test/fpr_gap": 0.0,
+    "test/sp_gap": 0.0,
+    "test/worst_group_f1": 0.0,
+    "test/worst_group_accuracy": 0.30617283950617286
+  },
+  "config": {
+    "algorithm": "fairfed",
+    "dataset": "mimic",
+    "task": "mortality",
+    "sensitive_attr": "sex",
+    "rounds": 20,
+    "local_epochs": 1,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "client_fraction": 0.3,
+    "num_clients": 10,
+    "dirichlet_alpha": 0.3,
+    "model": {
+      "type": "mlp",
+      "hidden_dims": [
+        256,
+        128
+      ]
+    },
+    "seed": 2,
+    "save_dir": "results/full_evaluation/mimic/fairfed/seed2",
+    "experiment_name": "fairfed_mimic",
+    "early_stopping": {
+      "enabled": false,
+      "patience": 20,
+      "monitor": "val/worst_group_f1"
+    }
+  }
+}

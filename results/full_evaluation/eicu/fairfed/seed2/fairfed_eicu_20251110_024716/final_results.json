@@ -1,0 +1,46 @@
+{
+  "algorithm": "fairfed",
+  "dataset": "eicu",
+  "total_rounds": 20,
+  "best_round": 1,
+  "total_time": 5.284121751785278,
+  "final_metrics": {
+    "test/loss": 0.7120651517595563,
+    "test/accuracy": 0.4725,
+    "test/macro_f1": 0.4350395940853198,
+    "test/auroc": 0.5044978598130252,
+    "test/eo_gap": 0.007017543859649034,
+    "test/fpr_gap": 0.08160083160083165,
+    "test/sp_gap": 0.03683966635773872,
+    "test/worst_group_f1": 0.4285714246322279,
+    "test/worst_group_accuracy": 0.38461538461538464
+  },
+  "config": {
+    "algorithm": "fairfed",
+    "dataset": "eicu",
+    "task": "mortality",
+    "sensitive_attr": "sex",
+    "rounds": 20,
+    "local_epochs": 1,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "client_fraction": 0.3,
+    "num_clients": 10,
+    "dirichlet_alpha": 0.3,
+    "model": {
+      "type": "mlp",
+      "hidden_dims": [
+        256,
+        128
+      ]
+    },
+    "seed": 2,
+    "save_dir": "results/full_evaluation/eicu/fairfed/seed2",
+    "experiment_name": "fairfed_eicu",
+    "early_stopping": {
+      "enabled": false,
+      "patience": 20,
+      "monitor": "val/worst_group_f1"
+    }
+  }
+}

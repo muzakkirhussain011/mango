@@ -1,0 +1,46 @@
+{
+  "algorithm": "afl",
+  "dataset": "eicu",
+  "total_rounds": 20,
+  "best_round": 1,
+  "total_time": 5.318705320358276,
+  "final_metrics": {
+    "test/loss": 0.6978935599327087,
+    "test/accuracy": 0.5125,
+    "test/macro_f1": 0.5124725765824327,
+    "test/auroc": 0.519179731578317,
+    "test/eo_gap": 0.09015594541910332,
+    "test/fpr_gap": 0.03693116193116197,
+    "test/sp_gap": 0.0403923385851096,
+    "test/worst_group_f1": 0.42288556765735996,
+    "test/worst_group_accuracy": 0.5042735042735043
+  },
+  "config": {
+    "algorithm": "afl",
+    "dataset": "eicu",
+    "task": "mortality",
+    "sensitive_attr": "sex",
+    "rounds": 20,
+    "local_epochs": 1,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "client_fraction": 0.3,
+    "num_clients": 10,
+    "dirichlet_alpha": 0.3,
+    "model": {
+      "type": "mlp",
+      "hidden_dims": [
+        256,
+        128
+      ]
+    },
+    "seed": 0,
+    "save_dir": "results/full_evaluation/eicu/afl/seed0",
+    "experiment_name": "afl_eicu",
+    "early_stopping": {
+      "enabled": false,
+      "patience": 20,
+      "monitor": "val/worst_group_f1"
+    }
+  }
+}

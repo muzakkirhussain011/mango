@@ -1,0 +1,46 @@
+{
+  "algorithm": "qffl",
+  "dataset": "compas",
+  "total_rounds": 20,
+  "best_round": 1,
+  "total_time": 3.063051700592041,
+  "final_metrics": {
+    "test/loss": 0.7000270038843155,
+    "test/accuracy": 0.504,
+    "test/macro_f1": 0.5011184602262668,
+    "test/auroc": 0.5262395596968088,
+    "test/eo_gap": 0.002525252525252486,
+    "test/fpr_gap": 0.033252623083131594,
+    "test/sp_gap": 0.0023212863654077376,
+    "test/worst_group_f1": 0.4290657394106871,
+    "test/worst_group_accuracy": 0.46601941747572817
+  },
+  "config": {
+    "algorithm": "qffl",
+    "dataset": "compas",
+    "task": "mortality",
+    "sensitive_attr": "sex",
+    "rounds": 20,
+    "local_epochs": 1,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "client_fraction": 0.3,
+    "num_clients": 10,
+    "dirichlet_alpha": 0.3,
+    "model": {
+      "type": "mlp",
+      "hidden_dims": [
+        256,
+        128
+      ]
+    },
+    "seed": 2,
+    "save_dir": "results/full_evaluation/compas/qffl/seed2",
+    "experiment_name": "qffl_compas",
+    "early_stopping": {
+      "enabled": false,
+      "patience": 20,
+      "monitor": "val/worst_group_f1"
+    }
+  }
+}

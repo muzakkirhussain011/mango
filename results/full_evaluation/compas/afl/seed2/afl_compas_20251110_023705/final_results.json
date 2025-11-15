@@ -1,0 +1,46 @@
+{
+  "algorithm": "afl",
+  "dataset": "compas",
+  "total_rounds": 20,
+  "best_round": 1,
+  "total_time": 3.0391528606414795,
+  "final_metrics": {
+    "test/loss": 0.6995996683835983,
+    "test/accuracy": 0.512,
+    "test/macro_f1": 0.5097330054170484,
+    "test/auroc": 0.5262234667439128,
+    "test/eo_gap": 0.002525252525252486,
+    "test/fpr_gap": 0.014205004035512503,
+    "test/sp_gap": 0.010623697453362557,
+    "test/worst_group_f1": 0.4350877147336411,
+    "test/worst_group_accuracy": 0.47896440129449835
+  },
+  "config": {
+    "algorithm": "afl",
+    "dataset": "compas",
+    "task": "mortality",
+    "sensitive_attr": "sex",
+    "rounds": 20,
+    "local_epochs": 1,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "client_fraction": 0.3,
+    "num_clients": 10,
+    "dirichlet_alpha": 0.3,
+    "model": {
+      "type": "mlp",
+      "hidden_dims": [
+        256,
+        128
+      ]
+    },
+    "seed": 2,
+    "save_dir": "results/full_evaluation/compas/afl/seed2",
+    "experiment_name": "afl_compas",
+    "early_stopping": {
+      "enabled": false,
+      "patience": 20,
+      "monitor": "val/worst_group_f1"
+    }
+  }
+}

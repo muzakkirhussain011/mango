@@ -1,0 +1,46 @@
+{
+  "algorithm": "fedprox",
+  "dataset": "mimic",
+  "total_rounds": 20,
+  "best_round": 1,
+  "total_time": 6.254850387573242,
+  "final_metrics": {
+    "test/loss": 0.7440550029277802,
+    "test/accuracy": 0.535,
+    "test/macro_f1": 0.3504779225350637,
+    "test/auroc": 0.4925053447139573,
+    "test/eo_gap": 0.0035587188612099642,
+    "test/fpr_gap": 0.0,
+    "test/sp_gap": 0.0024691358024691358,
+    "test/worst_group_f1": 0.0,
+    "test/worst_group_accuracy": 0.30864197530864196
+  },
+  "config": {
+    "algorithm": "fedprox",
+    "dataset": "mimic",
+    "task": "mortality",
+    "sensitive_attr": "sex",
+    "rounds": 20,
+    "local_epochs": 1,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "client_fraction": 0.3,
+    "num_clients": 10,
+    "dirichlet_alpha": 0.3,
+    "model": {
+      "type": "mlp",
+      "hidden_dims": [
+        256,
+        128
+      ]
+    },
+    "seed": 2,
+    "save_dir": "results/full_evaluation/mimic/fedprox/seed2",
+    "experiment_name": "fedprox_mimic",
+    "early_stopping": {
+      "enabled": false,
+      "patience": 20,
+      "monitor": "val/worst_group_f1"
+    }
+  }
+}

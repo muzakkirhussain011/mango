@@ -1,0 +1,46 @@
+{
+  "algorithm": "fairfed",
+  "dataset": "adult",
+  "total_rounds": 20,
+  "best_round": 1,
+  "total_time": 11.294761180877686,
+  "final_metrics": {
+    "test/loss": 0.7823375761508942,
+    "test/accuracy": 0.4593333333333333,
+    "test/macro_f1": 0.3147555961626313,
+    "test/auroc": 0.5099821077115764,
+    "test/eo_gap": 0.002331002331002363,
+    "test/fpr_gap": 0.0,
+    "test/sp_gap": 0.0016528925619834212,
+    "test/worst_group_f1": 0.45155708992174126,
+    "test/worst_group_accuracy": 0.2916201117318436
+  },
+  "config": {
+    "algorithm": "fairfed",
+    "dataset": "adult",
+    "task": "mortality",
+    "sensitive_attr": "sex",
+    "rounds": 20,
+    "local_epochs": 1,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "client_fraction": 0.3,
+    "num_clients": 10,
+    "dirichlet_alpha": 0.3,
+    "model": {
+      "type": "mlp",
+      "hidden_dims": [
+        256,
+        128
+      ]
+    },
+    "seed": 0,
+    "save_dir": "results/full_evaluation/adult/fairfed/seed0",
+    "experiment_name": "fairfed_adult",
+    "early_stopping": {
+      "enabled": false,
+      "patience": 20,
+      "monitor": "val/worst_group_f1"
+    }
+  }
+}

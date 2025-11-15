@@ -187,23 +187,34 @@ class FederatedExperiment:
     def initialize_aggregator(self):
         """Initialize the aggregator based on algorithm."""
         algo_name = self.config['algorithm']
-        
+        num_clients = self.data_info.get('num_clients', 40)
+
         if algo_name == 'faircare_fl':
             self.aggregator = FairCareFLAggregator(self.algo_config, self.device)
-        elif algo_name in ['fedavg', 'qffl', 'afl', 'fairfed']:
-            # Use FedAvg aggregator for these algorithms
-            # They differ mainly in client training, not aggregation
+        elif algo_name == 'fedavg':
             from faircare.algos.fedavg import FedAvgAggregator
-            self.aggregator = FedAvgAggregator(self.algo_config, self.device)
+            self.aggregator = FedAvgAggregator(n_clients=num_clients)
         elif algo_name == 'fedprox':
             from faircare.algos.fedprox import FedProxAggregator
-            self.aggregator = FedProxAggregator(self.algo_config, self.device)
+            fedprox_mu = self.algo_config.get('fedprox_mu', 0.01)
+            self.aggregator = FedProxAggregator(n_clients=num_clients, fedprox_mu=fedprox_mu)
+        elif algo_name == 'qffl':
+            from faircare.algos.qffl import QFFLAggregator
+            q_param = self.algo_config.get('q', 2.0)
+            self.aggregator = QFFLAggregator(n_clients=num_clients, q=q_param)
+        elif algo_name == 'afl':
+            from faircare.algos.afl import AFLAggregator
+            afl_lambda = self.algo_config.get('afl_lambda', 0.1)
+            self.aggregator = AFLAggregator(n_clients=num_clients, afl_lambda=afl_lambda)
+        elif algo_name == 'fairfed':
+            from faircare.algos.fairfed import FairFedAggregator
+            self.aggregator = FairFedAggregator(n_clients=num_clients)
         else:
             # Fallback to FedAvg for unknown algorithms
             self.logger.warning(f"Unknown algorithm '{algo_name}', using FedAvg aggregation")
             from faircare.algos.fedavg import FedAvgAggregator
-            self.aggregator = FedAvgAggregator(self.algo_config, self.device)
-        
+            self.aggregator = FedAvgAggregator(n_clients=num_clients)
+
         self.logger.info(f"Aggregator initialized: {algo_name}")
     
     def select_clients(self, round_num: int) -> List[int]:
@@ -334,29 +345,29 @@ class FederatedExperiment:
         
         return report
     
-    def aggregate_updates(self, client_reports: List[Dict[str, Any]], 
+    def aggregate_updates(self, client_reports: List[Dict[str, Any]],
                          round_ctx: Dict[str, Any]) -> Dict[str, torch.Tensor]:
         """Aggregate client updates.
-        
+
         Args:
             client_reports: List of client reports
             round_ctx: Round context information
-            
+
         Returns:
             Updated global model weights
         """
         global_weights = self.model.state_dict()
-        
+
         if self.config['algorithm'] == 'faircare_fl':
-            # Use FairCare-FL aggregator
+            # Use FairCare-FL aggregator (has special aggregate method)
             result = self.aggregator.aggregate(round_ctx, client_reports, global_weights)
             new_weights = result.new_global
             self.round_logs = result.server_logs
         else:
-            # Simple weighted averaging for other algorithms
-            new_weights = self.weighted_average(client_reports, global_weights)
+            # Use algorithm-specific aggregator weights
+            new_weights = self.weighted_average_with_aggregator(client_reports, global_weights)
             self.round_logs = {}
-        
+
         return new_weights
     
     def weighted_average(self, client_reports: List[Dict[str, Any]],
@@ -386,7 +397,39 @@ class FederatedExperiment:
             averaged_weights[key] = weighted_sum.to(global_weights[key].dtype)
 
         return averaged_weights
-    
+
+    def weighted_average_with_aggregator(self, client_reports: List[Dict[str, Any]],
+                                        global_weights: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Perform weighted averaging using algorithm-specific aggregator weights."""
+        # Filter out clients with no samples (skipped clients)
+        valid_reports = [r for r in client_reports if r['n_samples'] > 0]
+
+        # If no valid reports, return unchanged weights
+        if not valid_reports:
+            self.logger.warning("No valid client updates to aggregate")
+            return global_weights
+
+        # Get algorithm-specific weights from aggregator
+        aggregator_weights = self.aggregator.compute_weights(valid_reports)
+
+        # Convert to numpy for easier indexing
+        weights = aggregator_weights.cpu().numpy()
+
+        averaged_weights = {}
+        for key in global_weights:
+            weighted_sum = torch.zeros_like(global_weights[key], dtype=torch.float32)
+
+            for idx, report in enumerate(valid_reports):
+                weight = weights[idx]
+                # Convert to same device and dtype as needed for computation
+                delta = report['delta'][key].to(global_weights[key].device)
+                weighted_sum += weight * (global_weights[key].float() + delta)
+
+            # Cast back to original dtype
+            averaged_weights[key] = weighted_sum.to(global_weights[key].dtype)
+
+        return averaged_weights
+
     def evaluate_global_model(self, data_loader: DataLoader, prefix: str = 'val') -> Dict[str, float]:
         """Evaluate global model on given data.
         

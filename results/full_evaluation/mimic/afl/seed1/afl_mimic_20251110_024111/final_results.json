@@ -1,0 +1,46 @@
+{
+  "algorithm": "afl",
+  "dataset": "mimic",
+  "total_rounds": 20,
+  "best_round": 1,
+  "total_time": 6.330173015594482,
+  "final_metrics": {
+    "test/loss": 0.6976188719272614,
+    "test/accuracy": 0.509,
+    "test/macro_f1": 0.4987499374713517,
+    "test/auroc": 0.5028049701821221,
+    "test/eo_gap": 0.041685101471578334,
+    "test/fpr_gap": 0.049370574350904806,
+    "test/sp_gap": 0.04002489884842825,
+    "test/worst_group_f1": 0.3333333283603663,
+    "test/worst_group_accuracy": 0.45925925925925926
+  },
+  "config": {
+    "algorithm": "afl",
+    "dataset": "mimic",
+    "task": "mortality",
+    "sensitive_attr": "sex",
+    "rounds": 20,
+    "local_epochs": 1,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "client_fraction": 0.3,
+    "num_clients": 10,
+    "dirichlet_alpha": 0.3,
+    "model": {
+      "type": "mlp",
+      "hidden_dims": [
+        256,
+        128
+      ]
+    },
+    "seed": 1,
+    "save_dir": "results/full_evaluation/mimic/afl/seed1",
+    "experiment_name": "afl_mimic",
+    "early_stopping": {
+      "enabled": false,
+      "patience": 20,
+      "monitor": "val/worst_group_f1"
+    }
+  }
+}

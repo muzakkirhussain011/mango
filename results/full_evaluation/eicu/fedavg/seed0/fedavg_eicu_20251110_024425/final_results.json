@@ -1,0 +1,46 @@
+{
+  "algorithm": "fedavg",
+  "dataset": "eicu",
+  "total_rounds": 20,
+  "best_round": 1,
+  "total_time": 5.241158962249756,
+  "final_metrics": {
+    "test/loss": 0.710802001612527,
+    "test/accuracy": 0.54375,
+    "test/macro_f1": 0.3547118191601972,
+    "test/auroc": 0.5138907275374927,
+    "test/eo_gap": 0.007407407407407408,
+    "test/fpr_gap": 0.016227766227766227,
+    "test/sp_gap": 0.001750592112037895,
+    "test/worst_group_f1": 0.0,
+    "test/worst_group_accuracy": 0.3072289156626506
+  },
+  "config": {
+    "algorithm": "fedavg",
+    "dataset": "eicu",
+    "task": "mortality",
+    "sensitive_attr": "sex",
+    "rounds": 20,
+    "local_epochs": 1,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "client_fraction": 0.3,
+    "num_clients": 10,
+    "dirichlet_alpha": 0.3,
+    "model": {
+      "type": "mlp",
+      "hidden_dims": [
+        256,
+        128
+      ]
+    },
+    "seed": 0,
+    "save_dir": "results/full_evaluation/eicu/fedavg/seed0",
+    "experiment_name": "fedavg_eicu",
+    "early_stopping": {
+      "enabled": false,
+      "patience": 20,
+      "monitor": "val/worst_group_f1"
+    }
+  }
+}
