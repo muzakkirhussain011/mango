@@ -212,11 +212,8 @@ def load_adult(
         X = X_numeric
     
     print(f"Feature matrix shape: {X.shape}")
-    
-    # Standardize features
-    scaler = StandardScaler()
-    X = scaler.fit_transform(X.astype(float))
-    
+    X = X.astype(float)
+
     # Verify data integrity
     assert len(X) == len(y), f"X and y lengths don't match: {len(X)} vs {len(y)}"
     if a is not None:
@@ -243,11 +240,17 @@ def load_adult(
             random_state=seed, stratify=y_temp
         )
         a_train = a_val = a_test = None
-    
+
+    # Standardize features — fit on TRAIN ONLY to avoid leakage, then transform val/test.
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_val = scaler.transform(X_val)
+    X_test = scaler.transform(X_test)
+
     print(f"Train: {len(X_train)} samples")
     print(f"Val: {len(X_val)} samples")
     print(f"Test: {len(X_test)} samples")
-    
+
     # Create datasets
     train_dataset = AdultDataset(X_train, y_train, a_train)
     val_dataset = AdultDataset(X_val, y_val, a_val)

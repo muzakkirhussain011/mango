@@ -29,10 +29,33 @@ import seaborn as sns
 # Import algorithm implementations
 from faircare.algos.faircare_fl import FairCareFLAggregator
 from faircare.core.client import client_update
-from faircare.data.datasets import load_dataset, create_federated_splits
+from faircare.data import load_dataset  # REAL dataset dispatcher (adult/heart/synth_health/diabetes130/compas)
+from faircare.data.datasets import create_federated_splits  # Dirichlet partitioner (works on any (X,y,a) dataset)
 from faircare.models.networks import create_model
 from faircare.utils.metrics import compute_fairness_metrics, compute_worst_group_metrics
 from faircare.utils.logging import setup_logger, MetricsLogger
+
+
+def _select_device(requested=None):
+    """Resolve a usable torch.device: honor an available explicit request, else CUDA > MPS > CPU.
+
+    Enables the Apple-Silicon GPU (MPS) on the user's MacBook Pro M4 Max, while still
+    working on CUDA boxes and CPU-only machines. Never returns an unavailable device.
+    """
+    req = requested.type if isinstance(requested, torch.device) else requested
+    mps_ok = bool(getattr(torch.backends, "mps", None)) and torch.backends.mps.is_available()
+    if req == "cuda" and torch.cuda.is_available():
+        return torch.device("cuda")
+    if req == "mps" and mps_ok:
+        return torch.device("mps")
+    if req == "cpu":
+        return torch.device("cpu")
+    # auto / unavailable request -> best available
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if mps_ok:
+        return torch.device("mps")
+    return torch.device("cpu")
 
 
 class FederatedExperiment:
@@ -45,7 +68,7 @@ class FederatedExperiment:
             config: Experiment configuration dictionary
         """
         self.config = config
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = _select_device(self.config.get('device', 'auto'))
         
         # Setup paths
         self.setup_paths()
@@ -119,15 +142,16 @@ class FederatedExperiment:
         """Load and prepare dataset for federated learning."""
         self.logger.info(f"Loading dataset: {self.config['dataset']}")
         
-        # Load dataset
-        dataset_config = {
-            'name': self.config['dataset'],
-            'task': self.config.get('task', 'classification'),
-            'sensitive_attr': self.config.get('sensitive_attr', 'sex'),
-            'preprocessing': self.config.get('preprocessing', {'normalize': True})
-        }
-        
-        train_data, val_data, test_data = load_dataset(**dataset_config)
+        # Load dataset via the REAL loader dispatcher (faircare.data.load_dataset).
+        # Returns a Dict: {"train","val","test","n_features","n_classes","sensitive_attribute", ...}
+        data = load_dataset(
+            name=self.config['dataset'],
+            sensitive_attribute=self.config.get('sensitive_attr', 'sex'),
+            seed=self.config.get('seed', 42),
+        )
+        train_data = data['train']
+        val_data = data['val']
+        test_data = data['test']
         
         # Create federated splits
         num_clients = self.config.get('num_clients', 40)
@@ -145,14 +169,21 @@ class FederatedExperiment:
         self.val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
         self.test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
         
-        # Get data statistics
-        input_dim = train_data[0][0].shape[0] if hasattr(train_data[0][0], 'shape') else 100
-        num_classes = len(torch.unique(torch.tensor([y for _, y, _ in train_data])))
-        num_groups = len(torch.unique(torch.tensor([a for _, _, a in train_data])))
+        # Get data statistics (prefer loader-provided metadata; fall back to inspection)
+        input_dim = data.get('n_features')
+        if input_dim is None:
+            input_dim = train_data[0][0].shape[0]
+        num_classes = data.get('n_classes')
+        if num_classes is None:
+            num_classes = len(torch.unique(torch.tensor([int(y) for _, y, _ in train_data])))
+        sens = getattr(train_data, 'a', None)
+        if sens is None:
+            sens = getattr(train_data, 'sensitive_attrs', None)
+        num_groups = int(torch.unique(sens).numel()) if sens is not None else 2
 
         self.data_info = {
-            'input_dim': input_dim,
-            'num_classes': num_classes,
+            'input_dim': int(input_dim),
+            'num_classes': int(num_classes),
             'num_groups': num_groups,
             'num_clients': len(self.client_data),  # Actual number of clients with data
             'total_samples': len(train_data)
@@ -734,14 +765,14 @@ def parse_arguments():
     parser.add_argument('--algorithm', type=str, default='faircare_fl',
                        choices=['faircare_fl', 'fedavg', 'fedprox', 'afl', 'qffl', 'fairfed'],
                        help='Federated learning algorithm')
-    parser.add_argument('--dataset', type=str, default='mimic',
-                       choices=['mimic', 'eicu', 'adult', 'compas', 'synthetic'],
-                       help='Dataset name')
-    parser.add_argument('--task', type=str, default='mortality',
-                       help='Prediction task')
-    parser.add_argument('--sensitive_attr', type=str, default='race',
-                       choices=['race', 'sex', 'age', 'ethnicity'],
-                       help='Sensitive attribute for fairness')
+    parser.add_argument('--dataset', type=str, default='adult',
+                       choices=['adult', 'heart', 'synth_health', 'diabetes130', 'compas', 'mimic', 'eicu'],
+                       help='Dataset name (mimic/eicu fall back to synthetic data — not real ICU data)')
+    parser.add_argument('--task', type=str, default='classification',
+                       help='Prediction task label (informational; real loaders ignore it)')
+    parser.add_argument('--sensitive_attr', type=str, default='sex',
+                       choices=['race', 'sex', 'age', 'ethnicity', 'gender'],
+                       help='Sensitive attribute for fairness (must be supported by the chosen dataset)')
     
     # Training parameters
     parser.add_argument('--rounds', type=int, default=200,
@@ -785,6 +816,9 @@ def parse_arguments():
     # Experiment settings
     parser.add_argument('--seed', type=int, default=42,
                        help='Random seed')
+    parser.add_argument('--device', type=str, default='auto',
+                       choices=['auto', 'cuda', 'mps', 'cpu'],
+                       help='Compute device (auto = CUDA > Apple MPS > CPU)')
     parser.add_argument('--save_dir', type=str, default='results/experiments',
                        help='Directory to save results')
     parser.add_argument('--experiment_name', type=str, default=None,
@@ -825,6 +859,7 @@ def main():
             'client_fraction': args.client_fraction,
             'num_clients': args.num_clients,
             'dirichlet_alpha': args.dirichlet_alpha,
+            'device': args.device,
             'model': {
                 'type': args.model_type,
                 'hidden_dims': args.hidden_dims

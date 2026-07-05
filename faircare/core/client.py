@@ -13,6 +13,28 @@ import copy
 from collections import defaultdict
 
 
+def _select_device(requested=None):
+    """Resolve a usable torch.device: honor an available explicit request, else CUDA > MPS > CPU.
+
+    Enables Apple MPS (MacBook Pro M-series) in addition to CUDA/CPU; never returns an
+    unavailable device (previously this forced CPU whenever CUDA was missing, which silently
+    disabled the Apple GPU).
+    """
+    req = requested.type if isinstance(requested, torch.device) else requested
+    mps_ok = bool(getattr(torch.backends, "mps", None)) and torch.backends.mps.is_available()
+    if req == "cuda" and torch.cuda.is_available():
+        return torch.device("cuda")
+    if req == "mps" and mps_ok:
+        return torch.device("mps")
+    if req == "cpu":
+        return torch.device("cpu")
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if mps_ok:
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
 class GradientReversalLayer(torch.autograd.Function):
     """Gradient Reversal Layer for adversarial debiasing."""
     
@@ -78,8 +100,8 @@ class FairCareClient:
             device: Device for computation
         """
         self.client_id = client_id
-        # Ensure device is CPU if CUDA is not available
-        self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
+        # Resolve device honoring CUDA > MPS (Apple Silicon) > CPU
+        self.device = _select_device(device)
         self.model = model.to(self.device)
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
@@ -379,7 +401,11 @@ class FairCareClient:
                 # For the main model, we want to fool the adversary
                 # Re-compute with non-detached features for gradient flow to main model
                 adv_predictions_main = self.adversary(features, adaptive_lambda)
-                loss_components['adv'] = -adaptive_lambda * F.cross_entropy(adv_predictions_main, sensitive_attr)
+                # NOTE: the adversary applies a Gradient Reversal Layer internally (see
+                # AdversarialDebiasingNetwork.forward), which already flips the sign of the
+                # encoder gradient. The loss coefficient must therefore be POSITIVE — a second
+                # negation here would make the encoder *reveal* the sensitive attribute.
+                loss_components['adv'] = adaptive_lambda * F.cross_entropy(adv_predictions_main, sensitive_attr)
             else:
                 loss_components['adv'] = torch.tensor(0.0, device=self.device)
 

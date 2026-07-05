@@ -20,6 +20,27 @@ from faircare.config import FairCareFLConfig
 logger = logging.getLogger(__name__)
 
 
+def _select_device(requested=None):
+    """Resolve a usable torch.device: honor an available explicit request, else CUDA > MPS > CPU.
+
+    Enables Apple MPS (MacBook Pro M-series) in addition to CUDA/CPU; never returns an
+    unavailable device. (cvxpy's MGDA QP still runs on CPU regardless — that is expected.)
+    """
+    req = requested.type if isinstance(requested, torch.device) else requested
+    mps_ok = bool(getattr(torch.backends, "mps", None)) and torch.backends.mps.is_available()
+    if req == "cuda" and torch.cuda.is_available():
+        return torch.device("cuda")
+    if req == "mps" and mps_ok:
+        return torch.device("mps")
+    if req == "cpu":
+        return torch.device("cpu")
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if mps_ok:
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
 @dataclass
 class AggregationOutput:
     """Output from the aggregation step."""
@@ -72,7 +93,7 @@ class FairCareFLAggregator:
             config: Algorithm configuration (Dict for legacy or FairCareFLConfig for enhanced)
             device: Device for tensor operations
         """
-        self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
+        self.device = _select_device(device)
         self.version = "2.1.0"
         self.round_counter = 0
 

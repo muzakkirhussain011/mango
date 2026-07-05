@@ -99,34 +99,34 @@ def load_heart(
     # Prepare features
     feature_columns = df.columns.drop(['target'])
     X = df[feature_columns].values
-    
-    # Standardize features
+
+    # Split data. IMPORTANT: carry the sensitive attribute `a` THROUGH train_test_split so that
+    # rows stay aligned. (The previous version sliced `a` positionally from the unshuffled array
+    # AFTER shuffling X/y, which silently misaligned every fairness metric on Heart.)
+    if a is not None:
+        X_temp, X_test, y_temp, y_test, a_temp, a_test = train_test_split(
+            X, y, a, test_size=test_size, random_state=seed, stratify=y
+        )
+        X_train, X_val, y_train, y_val, a_train, a_val = train_test_split(
+            X_temp, y_temp, a_temp, test_size=val_size/(1-test_size),
+            random_state=seed, stratify=y_temp
+        )
+    else:
+        X_temp, X_test, y_temp, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=seed, stratify=y
+        )
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_temp, y_temp, test_size=val_size/(1-test_size),
+            random_state=seed, stratify=y_temp
+        )
+        a_train = a_val = a_test = None
+
+    # Standardize features — fit on TRAIN ONLY to avoid leakage, then transform val/test.
     scaler = StandardScaler()
-    X = scaler.fit_transform(X)
-    
-    # Split data
-    X_temp, X_test, y_temp, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=seed, stratify=y
-    )
-    
-    if a is not None:
-        a_temp = a[: len(X_temp)]
-        a_test = a[len(X_temp): len(X_temp) + len(X_test)]
-    else:
-        a_temp = None
-        a_test = None
-    
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_temp, y_temp, test_size=val_size/(1-test_size), random_state=seed, stratify=y_temp
-    )
-    
-    if a is not None:
-        a_train = a_temp[: len(X_train)]
-        a_val = a_temp[len(X_train):]
-    else:
-        a_train = None
-        a_val = None
-    
+    X_train = scaler.fit_transform(X_train)
+    X_val = scaler.transform(X_val)
+    X_test = scaler.transform(X_test)
+
     # Create datasets
     train_dataset = HeartDataset(X_train, y_train, a_train)
     val_dataset = HeartDataset(X_val, y_val, a_val)
