@@ -12,7 +12,7 @@ dist/
 .mypy_cache/
 .pytest_cache/
 *.log
-data/
+/data/
 reports/
 paper/figs/*
 paper/tables/*
