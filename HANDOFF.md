@@ -99,7 +99,15 @@ pip install pytest ruff black
 
 ## 5. How to run
 
-**Smoke test (fast, proves the pipeline end-to-end):**
+**Fastest path — Google Colab GPU (recommended).** Open `notebooks/colab_research.ipynb` in Colab
+directly from GitHub:
+`https://colab.research.google.com/github/muzakkirhussain011/mango/blob/main/notebooks/colab_research.ipynb`
+Then `Runtime > Change runtime type > GPU` and `Run all`. It clones `main`, installs deps, checks the
+GPU, and runs the smoke test + validation gate + controlled-bias + new-loader checks. Flip
+`RUN_FULL_SWEEP = True` (cell 8) for the headline grid. Colab GPUs are CUDA, which `_select_device()`
+picks automatically. (`--device mps` is for the MacBook; Colab uses `--device cuda`.)
+
+**Local — smoke test (fast, proves the pipeline end-to-end):**
 ```bash
 python -m faircare.experiments.run_experiments \
   --dataset adult --algorithm fedavg --sensitive_attr sex \
