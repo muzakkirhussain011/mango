@@ -240,6 +240,14 @@ class FederatedExperiment:
         elif algo_name == 'fairfed':
             from faircare.algos.fairfed import FairFedAggregator
             self.aggregator = FairFedAggregator(n_clients=num_clients)
+        elif algo_name == 'fedgma':
+            # FedGMA: no-regret mixture of aggregators (routes through the compute_weights seam,
+            # NOT the orphaned faircare_fl.aggregate() path).
+            from faircare.algos.fedgma import FedGMAAggregator
+            self.aggregator = FedGMAAggregator(
+                n_clients=num_clients,
+                total_rounds=self.config.get('rounds', 40),
+            )
         else:
             # Fallback to FedAvg for unknown algorithms
             self.logger.warning(f"Unknown algorithm '{algo_name}', using FedAvg aggregation")
@@ -763,7 +771,7 @@ def parse_arguments():
     
     # Core parameters
     parser.add_argument('--algorithm', type=str, default='faircare_fl',
-                       choices=['faircare_fl', 'fedavg', 'fedprox', 'afl', 'qffl', 'fairfed'],
+                       choices=['faircare_fl', 'fedavg', 'fedprox', 'afl', 'qffl', 'fairfed', 'fedgma'],
                        help='Federated learning algorithm')
     parser.add_argument('--dataset', type=str, default='adult',
                        choices=['adult', 'heart', 'synth_health', 'diabetes130', 'compas', 'mimic', 'eicu'],

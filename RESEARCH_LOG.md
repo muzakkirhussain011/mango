@@ -63,10 +63,20 @@ _(Repeat per dataset: COMPAS, Diabetes-130, synth_health.)_
 - Running the 30-round validation gate (all 6 baselines on Adult) + controlled-bias + new-loader checks.
 - Next: full 6×4×seeds sweep → fill the leaderboard → this is the bar our method must clear.
 
-### Iter 1 — SOTA research + novel design (in progress)
-- Background workflow: online survey of fair-FL aggregators, bias detection/mitigation, ensembles/MoE/
-  distillation, benchmarks, and MOO; then 3 diverse novel-ensemble designs; adversarial novelty/
-  feasibility critique; synthesized spec. Deliverables land in `research/`.
+### Iter 1 — SOTA research + novel design + first implementation (DONE / running)
+- Online survey (10-agent workflow, web access confirmed) → `research/FEDGMA_DESIGN.md` (survey +
+  spec + citations + ablation plan) and `research/ADVERSARIAL_CRITIQUE.md`.
+- **Chosen method: FedGMA — Federated Gated Mixture-of-Aggregators with No-Regret Fair Blending.**
+  Casts aggregation-rule selection as online convex optimization: a bank of correctly-implemented
+  experts (FedAvg, real q-FFL q∈{0.5,2}, real AFL, FairFed, group-DRO) is blended by Hedge over a
+  convex surrogate `L_t(w)=Σ w_k loss_k + Σ_c λ_c|Σ w_k Δr^c_k|`, giving `O(√(T ln M))` regret —
+  provably no worse than the best single aggregator in hindsight. Slow dual ascent on EO/FPR/SP gaps.
+- **Implemented** the GMA-Hedge spine: `faircare/algos/fedgma.py` (registered `fedgma`), wired into
+  `run_experiments.py` via the clean `compute_weights` seam (not the orphaned `aggregate()` path).
+  Note: this new expert bank also *fixes* the repo's mislabeled q-FFL/AFL (they were inverted).
+- **Enqueued** `iter1_fedgma_vs_baselines` (7 algos × 4 datasets × 3 seeds). Worker runs it on GPU.
+- Deferred (next iterations, per design §7): signed per-group surrogate refinement + surrogate↔test
+  correlation check; learned gate `g_φ`; DFBD online training; distillation hull-escape; full ablations.
 
-### Iter 2+ — Implement → run → analyze → improve
-- _to be filled_
+### Iter 2+ — run → analyze → improve
+- _worker results land in `results/auto/iter1_fedgma_vs_baselines/summary_agg.csv` → filled here_

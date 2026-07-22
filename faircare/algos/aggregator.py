@@ -105,6 +105,7 @@ for mod in (
     "faircare.algos.afl",
     "faircare.algos.fairfate",
     "faircare.algos.fairfed",
+    "faircare.algos.fedgma",
     "faircare.algos.faircare_fl",
 ):
     try:
