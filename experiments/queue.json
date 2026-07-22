@@ -2,6 +2,17 @@
   "_comment": "Job queue for the autonomous Colab GPU worker (scripts/colab_worker.py). Claude edits this to request experiments; the worker runs any job whose results/auto/<id>/summary.csv does not yet exist, then commits + pushes results. Keep jobs small enough to finish within a Colab session.",
   "jobs": [
     {
+      "id": "iter1a_fedgma_smoke",
+      "note": "Fail-fast: does FedGMA run end-to-end on GPU? Tiny grid; if this errors, its summary.csv row carries the traceback for Claude to fix.",
+      "algorithms": ["fedavg", "fedgma"],
+      "datasets": [["adult", "sex"], ["synth_health", "sex"]],
+      "seeds": [0],
+      "rounds": 10,
+      "local_epochs": 1,
+      "num_clients": 10,
+      "dirichlet_alpha": 0.3
+    },
+    {
       "id": "iter1_fedgma_vs_baselines",
       "note": "FedGMA (our method) vs all baselines, 4 datasets x 3 seeds. First head-to-head. Fills the RESEARCH_LOG leaderboard.",
       "algorithms": ["fedavg", "fedprox", "qffl", "afl", "fairfed", "faircare_fl", "fedgma"],
