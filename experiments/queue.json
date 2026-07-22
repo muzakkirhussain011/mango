@@ -14,10 +14,10 @@
     },
     {
       "id": "iter1_fedgma_vs_baselines",
-      "note": "FedGMA (our method) vs all baselines, 4 datasets x 3 seeds. First head-to-head. Fills the RESEARCH_LOG leaderboard.",
+      "note": "FedGMA vs all baselines, 4 datasets x 5 seeds. Front-loaded batch: the free worker runs all of this before Claude needs to engage (usage-budget friendly). Fills the RESEARCH_LOG leaderboard with statistical power.",
       "algorithms": ["fedavg", "fedprox", "qffl", "afl", "fairfed", "faircare_fl", "fedgma"],
       "datasets": [["adult", "sex"], ["compas", "race"], ["diabetes130", "race"], ["synth_health", "sex"]],
-      "seeds": [0, 1, 2],
+      "seeds": [0, 1, 2, 3, 4],
       "rounds": 40,
       "local_epochs": 2,
       "num_clients": 20,

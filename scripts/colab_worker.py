@@ -162,8 +162,15 @@ def main():
                     git("add", "results/auto")
                     git("commit", "-m", "auto: results for job %s" % job["id"])
                     git("pull", "--rebase", "--autostash")
-                    if can_push:
-                        git("push", "origin", "main")
+                    # Always attempt push: works via GH_TOKEN remote OR an existing git
+                    # credential (e.g. `gh auth login`). Log the outcome either way.
+                    push = git("push", "origin", "main")
+                    if push.returncode == 0:
+                        print("[worker] pushed results for", job["id"], flush=True)
+                    else:
+                        print("[worker] PUSH FAILED for", job["id"],
+                              "- set GH_TOKEN or run 'gh auth login'. Results are committed locally.",
+                              flush=True)
             except Exception as e:  # noqa: BLE001
                 print("[worker] job", job.get("id"), "crashed:", e, flush=True)
         if not did_any:
