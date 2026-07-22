@@ -16,3 +16,7 @@ dist/
 reports/
 paper/figs/*
 paper/tables/*
+# Autonomous-worker heavy artifacts (keep the small summary/final_results, drop bulky per-run files)
+results/auto/**/checkpoints/
+results/auto/**/figures/
+results/auto/**/metrics.csv
