@@ -22,9 +22,15 @@ import subprocess
 import sys
 import time
 
-REPO = os.environ.get("MANGO_REPO", "/content/mango")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(_HERE)  # repo root = parent of scripts/
+REPO = os.environ.get("MANGO_REPO") or (
+    _REPO_ROOT if os.path.isdir(os.path.join(_REPO_ROOT, ".git")) else "/content/mango"
+)
 POLL_SECONDS = int(os.environ.get("WORKER_POLL_SECONDS", "60"))
-REMOTE_SLUG = "muzakkirhussain011/mango"
+# auto -> CUDA (Colab) > MPS (Apple Silicon) > CPU, resolved by run_experiments._select_device.
+WORKER_DEVICE = os.environ.get("WORKER_DEVICE", "auto")
+REMOTE_SLUG = os.environ.get("MANGO_REMOTE_SLUG", "muzakkirhussain011/mango")
 
 
 def git(*args, check=False):
@@ -70,7 +76,7 @@ def run_experiment(algo, dataset, sattr, seed, job, save_root):
            "--local_epochs", str(job.get("local_epochs", 2)),
            "--num_clients", str(job.get("num_clients", 20)),
            "--dirichlet_alpha", str(job.get("dirichlet_alpha", 0.3)),
-           "--seed", str(seed), "--device", "cuda", "--save_dir", save_dir]
+           "--seed", str(seed), "--device", WORKER_DEVICE, "--save_dir", save_dir]
     print("[run]", algo, dataset, sattr, "seed", seed, flush=True)
     r = subprocess.run(cmd, cwd=REPO, text=True, capture_output=True)
     row = {"algorithm": algo, "dataset": dataset, "sensitive": sattr, "seed": seed}
